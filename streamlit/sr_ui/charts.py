@@ -24,9 +24,9 @@ STATUS = {"OK": TEAL, "WARN": GOLD, "FAILED": TERRA, "SKIPPED": SEA}
 INK_2, AXIS, SHADE = DEEP, SEA, PALE
 TERMS = [("DIST_PTS", "Distribution"), ("VELOCITY_PTS", "Velocity"), ("PRICE_PTS", "Price"), ("PROMO_PTS", "Promo")]
 
-# Analysis views. Models share two supporting inks and are told apart by dash pattern.
-MODEL_STYLE = {"History": (TEAL, [1, 0]), "ARIMA": (SLATE, [7, 3]), "SARIMA": (SEA, [3, 3]),
-               "Holt-Winters": (SLATE, [10, 3, 2, 3]), "TCN": (SEA, [1, 3])}
+# Analysis views. Each model has its own palette ink and dash pattern (terracotta stays reserved for losses).
+MODEL_STYLE = {"History": (TEAL, [1, 0]), "ARIMA": (SLATE, [7, 3]), "SARIMA": (GOLD, [3, 3]),
+               "Holt-Winters": (SEA, [10, 3, 2, 3]), "TCN": (DEEP, [1, 3])}
 SEQ = [MIST, PALE, SEA, TEAL, DEEP]                                # low to high
 DIV = [TERRA, MIST, TEAL]                                          # loss, zero, gain (cells also carry signed labels)
 REGION_TILES = {"North": (1, 0), "West": (0, 1), "East": (2, 1), "South": (1, 2)}   # compass layout (col, row)
@@ -240,7 +240,8 @@ def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str,
     last = hist.iloc[[-1]]
     joins = pd.DataFrame([{"WEEK_END_DATE": last.WEEK_END_DATE.iloc[0], "MEAN": last.VALUE.iloc[0], "MODEL": r["model"]}
                           for r in results])
-    lines_df = pd.concat([fc[["WEEK_END_DATE", "MEAN", "MODEL"]], joins], ignore_index=True)
+    lines_df = pd.concat([joins, fc[["WEEK_END_DATE", "MEAN", "MODEL"]]], ignore_index=True) \
+        .sort_values(["MODEL", "WEEK_END_DATE"], kind="stable")
     names = ["History"] + [r["model"] for r in results]
     color = alt.Color("MODEL:N", scale=alt.Scale(domain=names, range=[MODEL_STYLE[n][0] for n in names]),
                       legend=alt.Legend(orient="top", title=None))
@@ -258,7 +259,7 @@ def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str,
                                                                              scale=alt.Scale(zero=zero)), color=color,
                                                                opacity=shown)
     f_line = alt.Chart(lines_df).mark_line(strokeWidth=2).encode(x=x, y="MEAN:Q", color=color, strokeDash=dash,
-                                                                 opacity=shown)
+                                                                 opacity=shown, order="WEEK_END_DATE:T")
     hover = alt.selection_point(fields=["WEEK_END_DATE"], nearest=True, on="pointerover", empty=False)
     all_pts = pd.concat([hist.rename(columns={"VALUE": "Y"}), fc.rename(columns={"MEAN": "Y"})[["WEEK_END_DATE", "Y", "MODEL"]]],
                         ignore_index=True)
@@ -266,11 +267,25 @@ def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str,
         x=x, y="Y:Q", color=color, opacity=alt.condition(hover, alt.value(1), alt.value(0)),
         tooltip=[alt.Tooltip("WEEK_END_DATE:T", title="Week ending"), alt.Tooltip("MODEL:N", title="Series"),
                  alt.Tooltip("Y:Q", title=value_title, format=fmt)]).add_params(hover)
-    rule = alt.Chart(all_pts).mark_rule(color=SLATE, strokeDash=[2, 2], opacity=0.6).encode(x=x).transform_filter(hover)
-    cut = alt.Chart(last).mark_rule(color=GOLD, strokeDash=[2, 2], strokeWidth=1.5).encode(x=x)
+    # one hover crosshair per week (not one per series), labelled with its week
+    weeks = all_pts[["WEEK_END_DATE"]].drop_duplicates()
+    rule = alt.Chart(weeks).mark_rule(color=SLATE, strokeDash=[2, 2], opacity=0.7).encode(x=x).transform_filter(hover)
+    rule_lbl = alt.Chart(weeks).mark_text(align="left", dx=4, dy=22, fontSize=11, color=SLATE).encode(
+        x=x, y=alt.value(0), text=alt.Text("WEEK_END_DATE:T", format="Week ending %d %b %Y")).transform_filter(hover)
+    # the last actual week, labelled, and the forecast period lightly shaded
+    cut = alt.Chart(last).mark_rule(color=DEEP, strokeDash=[2, 2], strokeWidth=1.5).encode(
+        x=x, tooltip=[alt.Tooltip("WEEK_END_DATE:T", title="Latest actual week")])
+    cut_lbl = alt.Chart(last).mark_text(align="right", dx=-4, dy=8, fontSize=11, color=DEEP).encode(
+        x=x, y=alt.value(0), text=alt.value("Latest actual"))
     zoom = alt.selection_interval(bind="scales", encodings=["x"])
-    return _theme((band + h_line.add_params(zoom) + f_line + cut + rule + pts).add_params(pick)
-                  .properties(height=320, width="container"))
+    layers = band + h_line.add_params(zoom) + f_line + cut + cut_lbl + rule + rule_lbl + pts
+    if not fc.empty:
+        span = pd.DataFrame({"START": [last.WEEK_END_DATE.iloc[0]], "END": [fc.WEEK_END_DATE.max()]})
+        shade = alt.Chart(span).mark_rect(color=PALE, opacity=0.35).encode(x="START:T", x2="END:T")
+        shade_lbl = alt.Chart(span).mark_text(align="left", dx=4, dy=8, fontSize=11, color=SLATE).encode(
+            x="START:T", y=alt.value(0), text=alt.value("Forecast"))
+        layers = shade + shade_lbl + layers
+    return _theme(layers.add_params(pick).properties(height=320, width="container"))
 
 
 def decomposition_chart(decomp: pd.DataFrame) -> alt.VConcatChart:
