@@ -495,7 +495,8 @@ def emerging_shifts(panel: pd.DataFrame, threshold_pts: float, min_z: float, sca
 
 # ---- Share report: competitive benchmark for one market and period ------------------------------------------------
 
-def share_report(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous", retailer: str | None = None) -> pd.DataFrame:
+def share_report(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous", retailer: str | None = None,
+                 measure: str = "value") -> pd.DataFrame:
     """The pandas reference for data.share_report (which computes the same in SQL for the app; this one backs the
     local preview's sample data and the tests). Every brand in the category for the last `weeks` against the `weeks` before (compare="previous") or the same
     weeks a year ago ("year_ago"), in all retailers combined or one: value share and its change in points, rank and
@@ -514,11 +515,12 @@ def share_report(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous",
         x = d[d.WEEK_END_DATE.isin(ws)].assign(TDP=lambda f: f.ACV_DIST_PCT * f.SKUS_SELLING,
                                                UPS=lambda f: f.UNIT_SALES / f.STORES_SELLING.where(f.STORES_SELLING > 0))
         g = x.groupby(["BRAND", "MANUFACTURER"])
+        base = g.VOLUME_SALES.sum() if measure == "volume" else g.VALUE_SALES.sum()
         out = pd.DataFrame({"SALES": g.VALUE_SALES.sum(), "ACV": g.ACV_DIST_PCT.mean(), "TDP": g.TDP.sum(),
                             "VELOCITY": g.UPS.mean(),
                             "PRICE_INDEX": g.apply(lambda f: np.average(f.PRICE_INDEX, weights=f.VALUE_SALES)
                                                    if f.VALUE_SALES.sum() > 0 else np.nan, include_groups=False)})
-        out["SHARE"] = 100 * out.SALES / out.SALES.sum()
+        out["SHARE"] = 100 * base / base.sum()
         out["TDP_SHARE"] = 100 * out.TDP / out.TDP.sum()
         out["RANK"] = out.SHARE.rank(ascending=False, method="min").astype(int)
         return out
@@ -529,6 +531,40 @@ def share_report(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous",
     r["SALES_GROWTH_PCT"] = 100 * (r.SALES / r.SALES_BEFORE.where(r.SALES_BEFORE > 0) - 1)
     r["FAIR_SHARE_INDEX"] = 100 * r.SHARE / r.TDP_SHARE.where(r.TDP_SHARE > 0)
     return r.reset_index().sort_values("RANK").reset_index(drop=True)
+
+
+def competitive_share_week(panel: pd.DataFrame, weeks: int = 52, measure: str = "value") -> pd.DataFrame:
+    """The pandas reference for data.competitive_share_week (sample data and tests): weekly share of each brand, all
+    retailers combined, last `weeks` weeks, on value or volume sales."""
+    d = panel.assign(WEEK_END_DATE=pd.to_datetime(panel.WEEK_END_DATE))
+    d = d[d.WEEK_END_DATE.isin(np.sort(d.WEEK_END_DATE.unique())[-weeks:])]
+    col = "VOLUME_SALES" if measure == "volume" else "VALUE_SALES"
+    g = d.groupby(["WEEK_END_DATE", "MANUFACTURER", "BRAND"], as_index=False)[col].sum()
+    g["SHARE_PCT"] = 100 * g[col] / g.groupby("WEEK_END_DATE")[col].transform("sum")
+    return g[["WEEK_END_DATE", "MANUFACTURER", "BRAND", "SHARE_PCT"]].sort_values(["WEEK_END_DATE", "BRAND"])
+
+
+def competitive_regions(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous", measure: str = "value") -> pd.DataFrame:
+    """The pandas reference for data.competitive_regions: per retailer and brand, share of the retailer's category now
+    and in the comparison period, its change, mean ACV and velocity (units per store per week)."""
+    d = panel.assign(WEEK_END_DATE=pd.to_datetime(panel.WEEK_END_DATE))
+    w = np.sort(d.WEEK_END_DATE.unique())
+    back = weeks if compare == "previous" else 52
+    _need(len(w), back + weeks, "The regional view")
+    now, before = w[-weeks:], (w[-2 * weeks:-weeks] if compare == "previous" else w[-52 - weeks:-52])
+    col = "VOLUME_SALES" if measure == "volume" else "VALUE_SALES"
+    keys = ["REGION", "RETAILER", "MARKET_ID", "MANUFACTURER", "BRAND"]
+
+    def block(ws) -> pd.DataFrame:
+        x = d[d.WEEK_END_DATE.isin(ws)].assign(UPS=lambda f: f.UNIT_SALES / f.STORES_SELLING.where(f.STORES_SELLING > 0))
+        g = x.groupby(keys).agg(BASE=(col, "sum"), ACV=("ACV_DIST_PCT", "mean"), VELOCITY=("UPS", "mean")).reset_index()
+        g["SHARE"] = 100 * g.BASE / g.groupby("MARKET_ID").BASE.transform("sum")
+        return g
+    a, b = block(now), block(before)
+    r = a.merge(b[keys + ["SHARE"]].rename(columns={"SHARE": "SHARE_BEFORE"}), on=keys, how="left")
+    r["SHARE_CHG_PTS"] = r.SHARE - r.SHARE_BEFORE
+    return r[keys + ["SHARE", "SHARE_BEFORE", "SHARE_CHG_PTS", "ACV", "VELOCITY"]].sort_values(["REGION", "RETAILER", "BRAND"]) \
+        .reset_index(drop=True)
 
 
 # ---- Scenario simulator: Monte Carlo on the brand's own elasticities ----------------------------------------------

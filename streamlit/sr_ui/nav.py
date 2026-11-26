@@ -378,13 +378,16 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
     z-index: 999999; transition: left .22s ease .12s, top .22s ease .12s }}
   body:has([data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible))) [data-testid="stExpandSidebarButton"],
   body:has([data-testid="stSidebar"][aria-expanded="false"]):has([data-testid="stExpandSidebarButton"]:hover) [data-testid="stExpandSidebarButton"] {{ left: 220px; top: 20px; transition-delay: .08s }}
-  [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {{ padding: 14px 0 0 0 !important; margin: 0 0 0 -15px; height: 52px; min-height: 52px; justify-content: flex-start }}
-  /* closed rail: everything on one centre axis */
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] {{ padding: 14px 0 0 0 !important; margin: 0; justify-content: center;
-    width: 68px; height: 52px }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] > div:first-child {{ justify-content: center; width: 100%; margin: 0 }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] img {{ height: 38px !important; width: auto; max-width: 44px; object-fit: contain;
-    margin: 0 auto }}
+  /* Keep the first track aligned with the icon rail as the sidebar reveals its labels. */
+  [data-testid="stSidebarContent"] {{ scrollbar-gutter: stable; padding-inline-start: 0 }}
+  [data-testid="stSidebarHeader"] {{ box-sizing: border-box; padding: 14px 0 0 !important;
+    height: 52px; min-height: 52px; align-items: flex-start }}
+  [data-testid="stSidebarHeader"] > div:first-child {{ display: grid; grid-template-columns: 68px auto;
+    align-items: center; gap: 0 }}
+  [data-testid="stSidebarHeader"] img {{ grid-column: 1; justify-self: center; height: 38px !important;
+    width: auto; max-width: 44px; object-fit: contain; margin: 0 !important }}
+  [data-testid="stSidebarNav"] {{ margin-inline-start: 20px }}
+  [data-testid="stSidebarUserContent"] {{ margin-inline-start: 27.5px }}
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] > div:first-child::after,
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLink"] > span[label],
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"]:not(:has(.sr-scope)),
@@ -600,6 +603,7 @@ PAGES = [  # (file, title, Material icon, sidebar section); Settings is added in
     # File names (and so URL paths: /Brief, /Trust ...) are unchanged; only the shown titles were renamed (2026-11-25).
     ("pages/0_Radar.py", "Radar", ":material/radar:", "Intelligence"),
     ("pages/1_Shift_detail.py", "Shift Detail", ":material/insights:", "Intelligence"),
+    ("pages/9_Competitive_View.py", "Competitive View", ":material/compare_arrows:", "Intelligence"),
     ("pages/2_Brief.py", "Weekly Brief", ":material/article:", "Intelligence"),
     ("pages/5_Ask_Chippy.py", "Ask Chippy", ":material/forum:", "Intelligence"),
     ("pages/6_Watchlist.py", "Watchlist", ":material/star:", "My workspace"),
@@ -1120,6 +1124,8 @@ def _fab_suggestions(page_title: str) -> list[str]:
                     f"Which driver had the largest impact on {b} in {m}?",
                     f"Which brands gained market share in {m}?",
                     f"What should I investigate next for {b} in {m}?"]
+    if page_title == "Competitive View" and st.session_state.get("cv_suggestions"):
+        return list(st.session_state["cv_suggestions"])        # built from the page's own figures
     if page_title == "Weekly Brief":
         return ["Summarise this week's brief in three points.", "What changed this week?"]
     return ["What changed this week?", "Which shifts were held back for data checks, and why?"]
@@ -1185,7 +1191,7 @@ def _toggle_radar_assistant() -> None:
 
 def assistant(page_title: str) -> None:
     """Use a dock on Radar and the existing popover on other pages."""
-    if page_title not in ("Radar", "Shift Detail", "Weekly Brief", "Watchlist", "Case Files", "Market Time Machine",
+    if page_title not in ("Radar", "Shift Detail", "Competitive View", "Weekly Brief", "Watchlist", "Case Files", "Market Time Machine",
                           "Data & Trust", "Settings"):
         with st.container(key="sr_fab"), st.popover("Ask Chippy AI", help="Ask Chippy AI"):
             _assistant_panel(page_title)
@@ -1295,7 +1301,8 @@ def _assistant_panel(page_title: str, docked: bool = False) -> None:
             sent = c2.form_submit_button("", icon=":material/send:", help="Send", type="primary", disabled=bool(unavailable))
         if not docked:
             st.caption("Click Chippy or anywhere outside to minimise. The conversation is kept.")
-        question = picked or (text.strip() if sent and text else None)
+        question = (picked or (text.strip() if sent and text else None)
+                    or (st.session_state.pop("sr_dock_pending", None) if docked else None))   # a page's suggested question
         if question and not unavailable:
             _fab_ask(chat, question, slot)
             st.rerun()

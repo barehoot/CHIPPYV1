@@ -111,11 +111,23 @@ def synthetic_ladder() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _share_report_ref(weeks, compare, retailer):
+# data.promo_index for the fake: a fixed table (the synthetic panel has no base sales to derive it from)
+PROMO_FIXTURE = pd.DataFrame({"BRAND": list(PANEL_BRANDS), "MANUFACTURER": [v[0] for v in PANEL_BRANDS.values()],
+                              "PROMO_INDEX": [0.94, 1.18, 1.01, 0.88, 0.97],
+                              "PROMO_INDEX_BEFORE": [1.03, 1.04, 0.99, 0.90, 0.98]})
+
+
+def _share_report_ref(weeks, compare, retailer, measure="value"):
     """data.share_report for the fake: the pandas reference (analytics.share_report) on the synthetic panel, which the
     SQL mirrors."""
     from sr_ui import analytics
-    return analytics.share_report(synthetic_panels()[0], int(weeks), compare, retailer)
+    return analytics.share_report(synthetic_panels()[0], int(weeks), compare, retailer, measure)
+
+
+def _cv_ref(name, *args):
+    """data.competitive_share_week / competitive_regions for the fake: their pandas references on the synthetic panel."""
+    from sr_ui import analytics
+    return getattr(analytics, name)(synthetic_panels()[0], *args)
 
 
 def build_fake():
@@ -203,7 +215,13 @@ def build_fake():
         "sku_retailer": lambda *a, **k: skus, "brand_share_weeks": lambda *a, **k: shares,
         "brand_panel": lambda category, weeks=104: synthetic_panels()[0],
         "price_ladder": lambda category, weeks=4: synthetic_ladder(),
-        "share_report": lambda category, weeks=4, compare="previous", retailer=None: _share_report_ref(weeks, compare, retailer),
+        "share_report": lambda category, weeks=4, compare="previous", retailer=None, measure="value":
+            _share_report_ref(weeks, compare, retailer, measure),
+        "competitive_share_week": lambda category, weeks=52, measure="value":
+            _cv_ref("competitive_share_week", int(weeks), measure),
+        "competitive_regions": lambda category, weeks=4, compare="previous", measure="value":
+            _cv_ref("competitive_regions", int(weeks), compare, measure),
+        "promo_index": lambda market_id, category, weeks=4, compare="previous": PROMO_FIXTURE.copy(),
         "portfolio": lambda rid: (lambda d: {"N_SHIFTS": len(d), "VALUE_LOSS": d.VALUE_AT_STAKE.clip(upper=0).sum(),
                                              "VALUE_GAIN": d.VALUE_AT_STAKE.clip(lower=0).sum(),
                                              "N_LOSS": int((d.VALUE_AT_STAKE < 0).sum()), "N_GAIN": int((d.VALUE_AT_STAKE > 0).sum()),
@@ -769,3 +787,115 @@ def test_ask_this_chart_builds_the_workbench(fake_data):
     ss = at.session_state
     assert (ss["wb_kind"], ss["wb_x"], ss["wb_y"], ss["wb_brands"]) == ("Bar", "RETAILER", "UNIT_SALES", ["Golden Bake"])
     assert (ss["wb_weeks"][1] - ss["wb_weeks"][0]).days == 11 * 7
+
+
+# ---- Competitive View ---------------------------------------------------------------------------------------------
+
+CV = "pages/9_Competitive_View.py"
+CV_VIEWS = {"Competitive Overview": ["Market share trends", "Share movement", "Competitor scorecard",
+                                     "Positioning matrix", "Strategic interpretation", "Where each brand sits"],
+            "Share Drivers": ["Competitive gap", "Performance assessment", "Strategic recommendation",
+                              "Driver comparison"],
+            "Opportunities & Risks": ["Regional competitive heatmap", "Opportunities", "Competitive threats",
+                                      "Priority action plan", "Distribution gap, ACV points", "Share gained, points"]}
+CV_ALWAYS = ["Competitive rank", "Lead over #2", "Distribution gap", "Here is how you stack up.", "Competitors gaining",
+             "Opportunities"]
+
+
+def test_competitive_view_sits_between_shift_detail_and_brief():
+    from sr_ui import nav as _nav
+    files = [f for f, *_ in _nav.PAGES]
+    assert files.index("pages/1_Shift_detail.py") + 1 == files.index(CV) == files.index("pages/2_Brief.py") - 1
+    assert next(t for f, t, *_ in _nav.PAGES if f == CV) == "Competitive View"
+
+
+@pytest.mark.parametrize("main", ["streamlit_app.py", "admin_app.py"])
+def test_competitive_view_every_tab_renders(fake_data, main):
+    at = _run(main, CV)
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Understand your position. Identify the gap." in _texts(at)
+    assert not [e for e in CV_ALWAYS if e not in _texts(at)], [e for e in CV_ALWAYS if e not in _texts(at)]
+    for view, expect in CV_VIEWS.items():
+        at.session_state["cv_view"] = view
+        at.run()
+        assert not at.exception, (view, [e.value for e in at.exception])
+        text = _texts(at)
+        missing = [e for e in expect if e not in text]
+        assert not missing and "Couldn't load" not in text, (view, missing)
+
+
+@pytest.mark.parametrize("weeks,compare,measure", [(13, "previous", "volume"), (52, "year_ago", "value")])
+def test_competitive_view_periods_and_share_basis(fake_data, weeks, compare, measure):
+    at = _run("streamlit_app.py", CV)
+    at.session_state["cv_weeks"], at.session_state["cv_compare"], at.session_state["cv_measure"] = weeks, compare, measure
+    for view in CV_VIEWS:
+        at.session_state["cv_view"] = view
+        at.run()
+        assert not at.exception, (view, [e.value for e in at.exception])
+        assert "Couldn't load" not in _texts(at), view
+    assert ("Volume share" if measure == "volume" else "Value share") in _texts(at)
+
+
+def test_competitive_view_focus_and_competitors_follow_the_selection(fake_data):
+    at = _run("streamlit_app.py", CV)
+    assert at.session_state["cv_focus"] == "Crunchy"                     # the focus manufacturer's leading brand
+    at.session_state["cv_focus"], at.session_state["cv_comp"] = "Golden Bake", ["Crunchy", "Store Brand"]
+    at.run()
+    matrix = at.dataframe[0].value
+    assert list(matrix.columns) == ["Group", "Measure", "Golden Bake", "Crunchy", "Store Brand"]
+
+
+def test_competitive_view_ask_chippy_handoff(fake_data):
+    at = _run("streamlit_app.py", CV)
+    at.button(key="cv_ask").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Crunchy" in at.session_state["sr_ask_about"]
+
+
+def test_competitive_view_priority_plan_investigates_in_shift_detail(fake_data):
+    at = _run("streamlit_app.py", CV)
+    at.session_state["cv_view"] = "Opportunities & Risks"
+    at.run()
+    at.button(key="cv_inv_1").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.session_state["shift_id"] and "What moved share" in _texts(at)
+
+
+def test_competitive_view_suggested_question_opens_the_dock(fake_data):
+    at = _run("streamlit_app.py", CV)
+    label, prompt = at.button(key="cv_q_0").label, at.session_state["cv_suggestions"][0]
+    assert "Crunchy" in label and len(label) < len(prompt) and "Crunchy" in prompt   # short label, full prompt
+    at.button(key="cv_q_0").click().run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.session_state["sr_radar_chat_open"] and ("ask", fake_data.AGENT) in fake_data.calls
+
+
+def test_competitive_view_masks_names_when_display_alias_is_on(fake_data, monkeypatch):
+    real = list(PANEL_BRANDS)
+    alias = {**{("BRAND", b): f"Brand {chr(65 + i)}" for i, b in enumerate(PANEL_BRANDS)},
+             **{("MANUFACTURER", m): f"Maker {i + 1}" for i, m in enumerate(sorted({m for m, *_ in PANEL_BRANDS.values()}))}}
+    monkeypatch.setitem(SETTINGS, "DISPLAY_ALIAS", True)
+    monkeypatch.setattr(fake_data, "aliases", lambda: alias)
+    at = _run("streamlit_app.py", CV)
+    for view in CV_VIEWS:
+        at.session_state["cv_view"] = view
+        at.run()
+        assert not at.exception, (view, [e.value for e in at.exception])
+        shown = _texts(at) + " ".join(df.value.to_csv() for df in at.dataframe) \
+            + " ".join(str(e.proto) for e in at.get("arrow_vega_lite_chart"))
+        assert not [n for n in real if n in shown], view
+        assert "Brand A" in shown, view
+
+
+def test_competitive_references_share_basis():
+    from sr_ui import analytics
+    panel = synthetic_panels()[0]
+    val = analytics.competitive_share_week(panel, 8, "value")
+    vol = analytics.competitive_share_week(panel, 8, "volume")
+    assert val.groupby("WEEK_END_DATE").SHARE_PCT.sum().round(6).eq(100).all()
+    assert vol.groupby("WEEK_END_DATE").SHARE_PCT.sum().round(6).eq(100).all()
+    assert not np.allclose(val.SHARE_PCT, vol.SHARE_PCT)                 # volume share is not value share
+    reg = analytics.competitive_regions(panel, 4, "previous", "value")
+    assert reg.groupby("MARKET_ID").SHARE.sum().round(6).eq(100).all()
+    assert analytics.share_report(panel, 4).SHARE.round(9).tolist() == \
+        analytics.share_report(panel, 4, measure="value").SHARE.round(9).tolist()   # default unchanged

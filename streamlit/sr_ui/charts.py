@@ -650,3 +650,169 @@ def pl_ladder(ladder: pd.DataFrame, focus: str | None = None):
     fig.update_xaxes(title="Pack size", categoryorder="array", categoryarray=order)
     fig.update_yaxes(title="Price per unit")
     return _pl(fig, 360)
+
+
+# ---- Competitive View --------------------------------------------------------------------------------------------
+# The focus brand is always rich teal; competitors take muted gold and slate first, then the other palette inks, and
+# are also told apart by dash pattern, so no comparison rests on colour alone.
+COMP_INKS = [GOLD, SLATE, SEA, DEEP]
+COMP_DASH = [[6, 3], [2, 2], [10, 3, 2, 3], [1, 3]]
+
+
+def cv_palette(focus: str, competitors: list[str]) -> tuple[list[str], list[str], list[list[int]]]:
+    """(domain, colours, dashes) for the focus brand then its competitors, in the order given."""
+    names = [focus] + [c for c in competitors if c != focus]
+    inks = [TEAL] + [COMP_INKS[i % len(COMP_INKS)] for i in range(len(names) - 1)]
+    dash = [[1, 0]] + [COMP_DASH[i % len(COMP_DASH)] for i in range(len(names) - 1)]
+    return names, inks, dash
+
+
+def cv_share_trend(df: pd.DataFrame, focus: str, competitors: list[str], share_title: str) -> alt.LayerChart:
+    """Weekly share lines in each brand's colour: the focus brand solid and heavier, competitors dashed. Every line ends
+    with its brand and latest value (labels nudged apart so they never overlap; the value shown is exact), and hovering
+    shows every brand's share for that week."""
+    names, inks, dash = cv_palette(focus, competitors)
+    d = df[df.BRAND.isin(names)].assign(WEEK_END_DATE=lambda f: pd.to_datetime(f.WEEK_END_DATE))
+    x = alt.X("WEEK_END_DATE:T", title=None, axis=alt.Axis(format="%b %y", tickCount="month", labelOverlap=True))
+    color = alt.Color("BRAND:N", scale=alt.Scale(domain=names, range=inks), legend=None)
+    lines = alt.Chart(d).mark_line(interpolate="monotone").encode(
+        x=x, y=alt.Y("SHARE_PCT:Q", title=share_title, scale=alt.Scale(zero=False)), color=color,
+        strokeDash=alt.StrokeDash("BRAND:N", scale=alt.Scale(domain=names, range=dash), legend=None),
+        strokeWidth=alt.condition(f"datum.BRAND == {focus!r}", alt.value(2.8), alt.value(1.8)),
+        order="WEEK_END_DATE:T")
+    last = d[d.WEEK_END_DATE == d.WEEK_END_DATE.max()].sort_values("SHARE_PCT").copy()
+    span = max(float(d.SHARE_PCT.max() - d.SHARE_PCT.min()), 1e-9)
+    pos, prev = [], None                                       # label positions only: at least 7% of the range apart
+    for v in last.SHARE_PCT.astype(float):
+        prev = v if prev is None else max(v, prev + 0.07 * span)
+        pos.append(prev)
+    last["LABEL_Y"] = pos
+    last["LABEL"] = last.BRAND + " " + last.SHARE_PCT.map(lambda v: f"{v:.1f}")
+    ends = alt.Chart(last).mark_text(align="left", dx=6, fontSize=11, fontWeight=600).encode(
+        x=x, y="LABEL_Y:Q", text="LABEL:N", color=color)
+    dots = alt.Chart(last).mark_point(filled=True, size=30).encode(x=x, y="SHARE_PCT:Q", color=color)
+    hover = alt.selection_point(fields=["WEEK_END_DATE"], nearest=True, on="pointerover", empty=False)
+    pts = alt.Chart(d).mark_point(filled=True, size=36).encode(
+        x=x, y="SHARE_PCT:Q", color=color, opacity=alt.condition(hover, alt.value(1), alt.value(0)),
+        tooltip=[alt.Tooltip("WEEK_END_DATE:T", title="Week ending"), alt.Tooltip("BRAND:N", title="Brand"),
+                 alt.Tooltip("SHARE_PCT:Q", title=share_title, format=".2f")]).add_params(hover)
+    rule = alt.Chart(d[["WEEK_END_DATE"]].drop_duplicates()).mark_rule(color=SLATE, strokeDash=[2, 2], opacity=0.6) \
+        .encode(x=x).transform_filter(hover)
+    width = 8 + 6.5 * int(last.LABEL.str.len().max() or 0)      # room on the right for the end labels
+    return _theme((lines + rule + pts + dots + ends).properties(height=230, width="container",
+                                                               padding={"left": 5, "top": 5, "bottom": 5, "right": width}))
+
+
+def cv_movement_bars(rep: pd.DataFrame, focus: str, competitors: list[str]) -> alt.LayerChart:
+    """Each selected brand's share change in points as signed bars in the brand's own colour (the same colours as the
+    trend and the matrix), largest gain first; direction reads from the side of zero and the signed label, and the
+    focus brand's label is bold."""
+    names, inks, _ = cv_palette(focus, competitors)
+    d = rep[rep.BRAND.isin(names)].sort_values("SHARE_CHG_PTS", ascending=False)
+    color = alt.Color("BRAND:N", scale=alt.Scale(domain=names, range=inks), legend=None)
+    tip = [alt.Tooltip("BRAND:N", title="Brand"), alt.Tooltip("SHARE:Q", title="Share %", format=".2f"),
+           alt.Tooltip("SHARE_BEFORE:Q", title="Share before %", format=".2f"),
+           alt.Tooltip("SHARE_CHG_PTS:Q", title="Change, pts", format="+.2f")]
+    return _theme(_signed_bars(d, "BRAND", "SHARE_CHG_PTS", color, tip, list(d.BRAND), "Share change, pts",
+                               emphasis=focus))
+
+
+CV_QUADRANTS = {  # (above average distribution, above average velocity) -> name used on the chart and in the page
+    (True, True): "Leaders", (False, True): "Under-distributed", (True, False): "Wide but slow",
+    (False, False): "Niche or at risk"}
+
+
+def cv_bubble(rep: pd.DataFrame, focus: str, competitors: list[str], money: str = "") -> alt.LayerChart:
+    """Distribution (mean ACV) against velocity (units per store per week), bubble area = value sales. Dotted lines at
+    the selected brands' averages split the plot into four named, lightly shaded quadrants. Each bubble is labelled."""
+    names, inks, _ = cv_palette(focus, competitors)
+    d = rep[rep.BRAND.isin(names)].dropna(subset=["ACV", "VELOCITY"])
+    ax, ay = float(d.ACV.mean()), float(d.VELOCITY.mean())
+    rx, ry = max(float(d.ACV.max() - d.ACV.min()), 2.0), max(float(d.VELOCITY.max() - d.VELOCITY.min()), 0.5)
+    x0, x1 = float(d.ACV.min()) - 0.22 * rx, float(d.ACV.max()) + 0.22 * rx
+    y0, y1 = float(d.VELOCITY.min()) - 0.3 * ry, float(d.VELOCITY.max()) + 0.5 * ry   # headroom for the quadrant labels
+    color = alt.Color("BRAND:N", scale=alt.Scale(domain=names, range=inks), legend=None)
+    x = alt.X("ACV:Q", title="Distribution, mean ACV %", scale=alt.Scale(domain=[x0, x1], nice=False))
+    y = alt.Y("VELOCITY:Q", title="Velocity, units per store per week", scale=alt.Scale(domain=[y0, y1], nice=False))
+    quads = pd.DataFrame([
+        {"X": ax, "X2": x1, "Y": ay, "Y2": y1, "Q": CV_QUADRANTS[(True, True)], "FILL": PALE, "OP": 0.55,
+         "LX": x1, "LY": y1, "ALIGN": "right"},
+        {"X": x0, "X2": ax, "Y": ay, "Y2": y1, "Q": CV_QUADRANTS[(False, True)], "FILL": GOLD, "OP": 0.12,
+         "LX": x0, "LY": y1, "ALIGN": "left"},
+        {"X": ax, "X2": x1, "Y": y0, "Y2": ay, "Q": CV_QUADRANTS[(True, False)], "FILL": SEA, "OP": 0.16,
+         "LX": x1, "LY": y0, "ALIGN": "right"},
+        {"X": x0, "X2": ax, "Y": y0, "Y2": ay, "Q": CV_QUADRANTS[(False, False)], "FILL": MIST, "OP": 0.9,
+         "LX": x0, "LY": y0, "ALIGN": "left"}])
+    shade = alt.Chart(quads).mark_rect().encode(
+        x=alt.X("X:Q", scale=alt.Scale(domain=[x0, x1], nice=False)), x2="X2:Q",
+        y=alt.Y("Y:Q", scale=alt.Scale(domain=[y0, y1], nice=False)), y2="Y2:Q",
+        color=alt.Color("FILL:N", scale=None), opacity=alt.Opacity("OP:Q", scale=None))
+    qlab = [alt.Chart(quads[quads.ALIGN == a]).mark_text(
+        align=a, baseline="top" if top else "bottom", dx=6 if a == "left" else -6, dy=6 if top else -6,
+        fontSize=10.5, fontWeight=600, color=SLATE, opacity=0.9).encode(x="LX:Q", y="LY:Q", text="Q:N")
+        .transform_filter(f"datum.LY == {y1 if top else y0}") for a in ("left", "right") for top in (True, False)]
+    tip = [alt.Tooltip("BRAND:N", title="Brand"), alt.Tooltip("ACV:Q", title="Mean ACV %", format=".1f"),
+           alt.Tooltip("VELOCITY:Q", title="Units per store per week", format=",.2f"),
+           alt.Tooltip("SALES:Q", title=f"Value sales{' (' + money + ')' if money else ''}", format=",.0f"),
+           alt.Tooltip("SHARE:Q", title="Share %", format=".2f")]
+    bubbles = alt.Chart(d).mark_circle(opacity=0.85, stroke=WHITE, strokeWidth=1.5).encode(
+        x=x, y=y, color=color, size=alt.Size("SALES:Q", scale=alt.Scale(range=[180, 2200]), legend=None), tooltip=tip)
+    labels = alt.Chart(d).mark_text(dy=-20, fontSize=11, fontWeight=600, color=DEEP).encode(x=x, y=y, text="BRAND:N")
+    avg = pd.DataFrame({"ACV": [ax], "VELOCITY": [ay]})
+    vx = alt.Chart(avg).mark_rule(color=SLATE, strokeDash=[2, 3], opacity=0.7).encode(x="ACV:Q")
+    vy = alt.Chart(avg).mark_rule(color=SLATE, strokeDash=[2, 3], opacity=0.7).encode(y="VELOCITY:Q")
+    layers = shade
+    for q in qlab:
+        layers = layers + q
+    return _theme((layers + vx + vy + bubbles + labels).properties(height=270, width="container"))
+
+
+def cv_gap_bars(gaps: pd.DataFrame) -> alt.LayerChart:
+    """The focus brand against the competitor average on each driver, as signed bars of the relative gap (%): teal
+    where the focus brand is ahead, terracotta where it trails, pale where the direction is neither good nor bad
+    (price). The caller sets each row's kind; both sides' values and the gap are in the tooltip."""
+    color, stroke = _polarity(["gain", "loss", "total"])
+    tip = [alt.Tooltip("DRIVER:N", title="Driver"), alt.Tooltip("FOCUS_TXT:N", title="Focus brand"),
+           alt.Tooltip("COMP_TXT:N", title="Competitor average"), alt.Tooltip("GAP:Q", title="Gap, %", format="+.1f")]
+    bars = _signed_bars(gaps, "DRIVER", "GAP", color, tip, list(gaps.DRIVER),
+                        "Relative gap to the competitor average, %", stroke)
+    m = max(float(gaps.GAP.abs().max()), 5.0) * 1.08         # headroom so the value labels are never clipped
+    extent = alt.Chart(pd.DataFrame({"GAP": [-m, m]})).mark_point(opacity=0).encode(x="GAP:Q")
+    return _theme(alt.layer(bars, extent).properties(height=BAR_ROW * max(len(gaps), 1) + BAR_AXIS, width="container"))
+
+
+def cv_ranked_bars(df: pd.DataFrame, color: str, unit: str) -> alt.LayerChart:
+    """Ranked horizontal bars in one unit (LABEL, VALUE, EVIDENCE), largest first, the value and unit printed at each
+    bar's end and the evidence on hover. No value axis: one chart never mixes units."""
+    d = df.assign(TXT=df.VALUE.map(lambda v: f"{v:.1f} {unit}" if unit != "%" else f"{v:.1f}%"))
+    y = alt.Y("LABEL:N", sort=list(d.sort_values("VALUE", ascending=False).LABEL), title=None,
+              axis=alt.Axis(labelLimit=190, labelFontSize=11.5, labelColor=DEEP, domain=False, ticks=False))
+    x = alt.X("VALUE:Q", title=None, axis=None, scale=alt.Scale(domain=[0, float(d.VALUE.max()) * 1.35]))
+    tip = [alt.Tooltip("LABEL:N", title="Item"), alt.Tooltip("TXT:N", title="Size"), alt.Tooltip("EVIDENCE:N", title="Evidence")]
+    bars = alt.Chart(d).mark_bar(cornerRadiusEnd=3, size=13, color=color).encode(y=y, x=x, tooltip=tip)
+    text = alt.Chart(d).mark_text(align="left", dx=5, fontSize=11, fontWeight=600, color=DEEP).encode(y=y, x=x, text="TXT:N")
+    return _theme((bars + text).properties(height=24 * max(len(d), 1) + 6, width="container"))
+
+
+def cv_region_heatmap(df: pd.DataFrame, focus: str, brands: list[str], measure: str, measure_title: str, fmt: str,
+                      diverging: bool) -> alt.LayerChart:
+    """Retailer x brand cells coloured by share or its change, the value printed in each cell; the focus brand first."""
+    d = df[df.BRAND.isin(brands)].copy()
+    scale, d["DARK"] = _cell_scale(d[measure], diverging)
+    order = [focus] + [b for b in brands if b != focus]
+    base = alt.Chart(d).encode(
+        x=alt.X("BRAND:N", sort=order, title=None,
+                axis=alt.Axis(orient="top", labelAngle=0, labelFontWeight=alt.ExprRef(f"datum.value == {focus!r} ? 700 : 400"))),
+        y=alt.Y("RETAILER:N", title=None, sort=sorted(d.RETAILER.unique())))
+    tip = [alt.Tooltip("RETAILER:N", title="Retailer"), alt.Tooltip("REGION:N", title="Region"),
+           alt.Tooltip("BRAND:N", title="Brand"), alt.Tooltip("SHARE:Q", title="Share %", format=".2f"),
+           alt.Tooltip("SHARE_CHG_PTS:Q", title="Change, pts", format="+.2f"),
+           alt.Tooltip("ACV:Q", title="Mean ACV %", format=".1f"),
+           alt.Tooltip("VELOCITY:Q", title="Units per store per week", format=",.2f")]
+    cells = base.mark_rect(cornerRadius=4, stroke=WHITE, strokeWidth=3).encode(
+        color=alt.Color(f"{measure}:Q", scale=scale, legend=alt.Legend(title=measure_title, orient="right", gradientLength=110)),
+        tooltip=tip)
+    text = base.mark_text(fontSize=12, fontWeight=600).encode(
+        text=alt.Text(f"{measure}:Q", format=fmt), color=alt.condition("datum.DARK", alt.value(WHITE), alt.value(DEEP)),
+        tooltip=tip)
+    return _theme((cells + text).properties(height=34 * max(d.RETAILER.nunique(), 1) + 40, width="container"))

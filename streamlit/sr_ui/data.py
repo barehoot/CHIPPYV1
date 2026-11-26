@@ -366,15 +366,18 @@ def brand_panel(category: str, weeks: int = 104) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)
-def share_report(category: str, weeks: int = 4, compare: str = "previous", retailer: str | None = None) -> pd.DataFrame:
+def share_report(category: str, weeks: int = 4, compare: str = "previous", retailer: str | None = None,
+                 measure: str = "value") -> pd.DataFrame:
     """The competitive share report, all in SQL: every brand's value share, change, rank and rank change, value sales
     and growth, mean ACV, value-weighted price index, velocity (units per store per week), share of distribution points
     (ACV x SKUs) and fair-share index, for the last N weeks against the N before ("previous") or the same weeks a year
-    ago ("year_ago"), in all retailers or one."""
+    ago ("year_ago"), in all retailers or one. measure="volume" bases share and rank on volume sales instead of value
+    (SALES and growth stay value)."""
     off = weeks if compare == "previous" else 52
     return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
                      b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND,
                                   SUM(s.VALUE_SALES) AS VALUE_SALES, SUM(s.UNIT_SALES) AS UNIT_SALES,
+                                  SUM(IFF(? = 'volume', s.VOLUME_SALES, s.VALUE_SALES)) AS BASE,
                                   MAX(s.ACV_DIST_PCT) AS ACV, MAX(s.STORES_SELLING) AS STORES,
                                   COUNT_IF(s.VALUE_SALES > 0) AS SKUS,
                                   CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX) THEN 'NOW'
@@ -388,14 +391,14 @@ def share_report(category: str, weeks: int = 4, compare: str = "previous", retai
                                            / NULLIF(SUM(UNIT_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0), 0)
                                   AS PRICE_INDEX
                            FROM b WHERE P IS NOT NULL),
-                     g AS (SELECT BRAND, MANUFACTURER, P, SUM(VALUE_SALES) AS SALES, AVG(ACV) AS ACV,
+                     g AS (SELECT BRAND, MANUFACTURER, P, SUM(VALUE_SALES) AS SALES, SUM(BASE) AS BASE, AVG(ACV) AS ACV,
                                   SUM(ACV * SKUS) AS TDP, AVG(UNIT_SALES / NULLIF(STORES, 0)) AS VELOCITY,
                                   SUM(PRICE_INDEX * VALUE_SALES) / NULLIF(SUM(IFF(PRICE_INDEX IS NULL, 0, VALUE_SALES)), 0)
                                   AS PRICE_INDEX
                            FROM x GROUP BY BRAND, MANUFACTURER, P),
-                     r AS (SELECT g.*, 100 * SALES / NULLIF(SUM(SALES) OVER (PARTITION BY P), 0) AS SHARE,
+                     r AS (SELECT g.*, 100 * BASE / NULLIF(SUM(BASE) OVER (PARTITION BY P), 0) AS SHARE,
                                   100 * TDP / NULLIF(SUM(TDP) OVER (PARTITION BY P), 0) AS TDP_SHARE,
-                                  RANK() OVER (PARTITION BY P ORDER BY SALES DESC) AS RNK
+                                  RANK() OVER (PARTITION BY P ORDER BY BASE DESC) AS RNK
                            FROM g)
                 SELECT n.BRAND, n.MANUFACTURER, n.SALES, n.ACV, n.TDP, n.VELOCITY, n.PRICE_INDEX, n.SHARE, n.TDP_SHARE,
                        n.RNK AS RANK, o.SHARE AS SHARE_BEFORE, o.SALES AS SALES_BEFORE, o.RNK AS RANK_BEFORE,
@@ -404,7 +407,73 @@ def share_report(category: str, weeks: int = 4, compare: str = "previous", retai
                        100 * n.SHARE / NULLIF(n.TDP_SHARE, 0) AS FAIR_SHARE_INDEX
                 FROM r n LEFT JOIN r o ON o.BRAND = n.BRAND AND o.MANUFACTURER = n.MANUFACTURER AND o.P = 'BEFORE'
                 WHERE n.P = 'NOW' ORDER BY RANK, n.BRAND""",
-             [weeks, off + weeks, off, category, retailer, retailer])
+             [measure, weeks, off + weeks, off, category, retailer, retailer])
+
+
+# ---- Competitive View (cached; SELECT only, on the same APP.V_UI_SKU_WEEK and APP.V_UI_SHARE_WEEK views) -------------
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def competitive_share_week(category: str, weeks: int = 52, measure: str = "value") -> pd.DataFrame:
+    """Weekly share of every brand in the category, all retailers combined, last N weeks: value share, or volume share
+    with measure="volume" (the Competitive View trend)."""
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
+                     b AS (SELECT s.WEEK_END_DATE, s.MANUFACTURER, s.BRAND,
+                                  SUM(IFF(? = 'volume', s.VOLUME_SALES, s.VALUE_SALES)) AS BASE
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ?
+                             AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                           GROUP BY s.WEEK_END_DATE, s.MANUFACTURER, s.BRAND)
+                SELECT WEEK_END_DATE, MANUFACTURER, BRAND,
+                       100 * BASE / NULLIF(SUM(BASE) OVER (PARTITION BY WEEK_END_DATE), 0) AS SHARE_PCT
+                FROM b ORDER BY WEEK_END_DATE, BRAND""", [measure, category, weeks])
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def competitive_regions(category: str, weeks: int = 4, compare: str = "previous", measure: str = "value") -> pd.DataFrame:
+    """Per retailer market and brand: share of that retailer's category (value, or volume) in the last N weeks and the
+    comparison period, its change, mean ACV and velocity (units per store per week), all in SQL (the Competitive View
+    regional heatmap and opportunity list)."""
+    off = weeks if compare == "previous" else 52
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
+                     b AS (SELECT s.WEEK_END_DATE, s.REGION, s.RETAILER, s.MARKET_ID, s.MANUFACTURER, s.BRAND,
+                                  SUM(IFF(? = 'volume', s.VOLUME_SALES, s.VALUE_SALES)) AS BASE,
+                                  SUM(s.UNIT_SALES) AS UNIT_SALES, MAX(s.ACV_DIST_PCT) AS ACV,
+                                  MAX(s.STORES_SELLING) AS STORES,
+                                  CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX) THEN 'NOW'
+                                       WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                                        AND s.WEEK_END_DATE <= DATEADD(week, -?, w.MX) THEN 'BEFORE' END AS P
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ?
+                           GROUP BY s.WEEK_END_DATE, s.REGION, s.RETAILER, s.MARKET_ID, s.MANUFACTURER, s.BRAND, w.MX),
+                     g AS (SELECT REGION, RETAILER, MARKET_ID, MANUFACTURER, BRAND, P, SUM(BASE) AS BASE,
+                                  AVG(ACV) AS ACV, AVG(UNIT_SALES / NULLIF(STORES, 0)) AS VELOCITY
+                           FROM b WHERE P IS NOT NULL GROUP BY REGION, RETAILER, MARKET_ID, MANUFACTURER, BRAND, P),
+                     r AS (SELECT g.*, 100 * BASE / NULLIF(SUM(BASE) OVER (PARTITION BY MARKET_ID, P), 0) AS SHARE
+                           FROM g)
+                SELECT n.REGION, n.RETAILER, n.MARKET_ID, n.MANUFACTURER, n.BRAND, n.SHARE, o.SHARE AS SHARE_BEFORE,
+                       n.SHARE - o.SHARE AS SHARE_CHG_PTS, n.ACV, n.VELOCITY
+                FROM r n LEFT JOIN r o ON o.MARKET_ID = n.MARKET_ID AND o.BRAND = n.BRAND
+                                      AND o.MANUFACTURER = n.MANUFACTURER AND o.P = 'BEFORE'
+                WHERE n.P = 'NOW' ORDER BY n.REGION, n.RETAILER, n.BRAND""",
+             [measure, weeks, off + weeks, off, category])
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def promo_index(market_id: str, category: str, weeks: int = 4, compare: str = "previous") -> pd.DataFrame:
+    """Each brand's mean promo index (its promoted-over-base sales ratio against the category's; 1 = in line with the
+    category) in the last N weeks and the comparison period, from the stored weekly index (one market; there is no
+    retailer split for this lever)."""
+    off = weeks if compare == "previous" else 52
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SHARE_WEEK
+                           WHERE MARKET_ID = ? AND CATEGORY = ?)
+                SELECT s.BRAND, s.MANUFACTURER,
+                       AVG(IFF(s.WEEK_END_DATE > DATEADD(week, -?, w.MX), s.PROMO_INDEX, NULL)) AS PROMO_INDEX,
+                       AVG(IFF(s.WEEK_END_DATE > DATEADD(week, -?, w.MX) AND s.WEEK_END_DATE <= DATEADD(week, -?, w.MX),
+                               s.PROMO_INDEX, NULL)) AS PROMO_INDEX_BEFORE
+                FROM SR_DB.APP.V_UI_SHARE_WEEK s, w
+                WHERE s.MARKET_ID = ? AND s.CATEGORY = ? AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                GROUP BY s.BRAND, s.MANUFACTURER ORDER BY s.BRAND""",
+             [market_id, category, weeks, off + weeks, off, market_id, category, off + weeks])
 
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)
