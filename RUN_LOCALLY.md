@@ -13,7 +13,7 @@ made up.
 ## What you need
 
 - Python 3.11, 3.12 or 3.13 ([python.org](https://www.python.org/downloads/); on Windows tick "Add python.exe to PATH").
-- About 500 MB of disk space for the packages.
+- About 1.5 GB of disk space for the packages (PyTorch, for the TCN forecast, is most of it).
 - An internet connection the first time, to install the packages.
 
 ## Quick start
@@ -53,7 +53,8 @@ streamlit run streamlit/demo_chippy_admin.py --server.port 8502      (in a secon
 - **Watchlist** and **Case Files** keep what you add only while the browser tab stays open (as in Snowflake:
   nothing is saved). The sample data has two weeks, so Market Time Machine and "Since last week" have a
   week to compare.
-- **Future Trends** shows TCN as unavailable unless PyTorch is installed; the other three models run.
+- **Future Trends** runs all four models, including TCN (PyTorch is in `requirements-demo.txt`). The first TCN fit
+  takes about 10 seconds; after that it is cached. Without PyTorch, TCN is left unticked and the other three run.
 - **Ask Chippy** needs the Snowflake agent, so it is switched off locally: the panel says live AI is
   unavailable and sends nothing. No sample answers are shown.
 - A small "Local preview · sample data" label at the top of every page marks the preview mode. The sample

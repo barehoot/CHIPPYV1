@@ -161,7 +161,7 @@ pipeline deployment order is in `README.md`.
 
 ### Insight Studio and Ask Chippy follow-up (26 November 2026, SR-065)
 
-- `pytest -q python/tests tests/local`: 212 passed, 1 skipped (TCN), 1 deselected. New: `python/tests/test_analytics.py`
+- `pytest -q python/tests tests/local`: 213 passed, 0 skipped (PyTorch now installed, so the TCN test runs), 1 deselected. New: `python/tests/test_analytics.py`
   (each model recovers what the synthetic panel plants: elasticities, the distribution loss and its date, the
   competitor that took the share, the planted SKU spike; the Auto rule) and SR-065 cases in `test_ui_pages.py` (every
   lens, model and workbench chart type; Save to Case file; Auto routing; the panel's agent switch; pulse timing; the
@@ -181,7 +181,8 @@ pipeline deployment order is in `README.md`.
   and detective stand in.
 - The sample data shows a "Market move" status on a shift where a medium data rule fired. This is a quirk of the
   sample data only.
-- The TCN forecast needs PyTorch. Without it, the model shows as unavailable and the other three models run.
+- The TCN forecast needs PyTorch (in `environment.yml` and `requirements-demo.txt`). Without it, TCN is left unticked
+  and shows as unavailable if picked; the other three models run. The first TCN fit takes about 10 seconds.
 - Insight Studio results are exploratory and computed in the app (B19); the brief and the bridge remain the numbers of
   record. Box and lasso selection is opt-in (B21).
 - AppTest cannot follow the "Ask the other agent" re-ask (B21); it was checked in a browser.

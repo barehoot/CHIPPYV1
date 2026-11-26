@@ -8,3 +8,4 @@ statsmodels>=0.14      # Shift Detail: Future Trends and Statistical Evidence
 pytest>=8              # needed: the demo's sample data comes from the UI tests
 plotly>=5.24,<7        # Insight Studio: interactive charts, box and lasso selection, drawing tools
 scikit-learn>=1.5      # Insight Studio: gradient boosting, k-means, Isolation Forest
+torch>=2.2             # Future Trends: the TCN forecast model (CPU); about 200 MB
