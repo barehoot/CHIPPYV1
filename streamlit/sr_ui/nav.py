@@ -344,8 +344,8 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
   position: absolute; left: 50%; top: calc(100% + 6px); transform: translateX(-50%); white-space: nowrap;
   background: {T['deep']}; color: {T['white']}; font: 500 12px/1.3 {SANS}; padding: 4px 8px; border-radius: 6px;
   opacity: 0; pointer-events: none; transition: opacity .15s ease; z-index: 2 }}
-[data-testid="stSidebarCollapseButton"] button::before {{ content: "Unpin sidebar" }}
-[data-testid="stExpandSidebarButton"]::before {{ content: "Pin sidebar" }}
+[data-testid="stSidebarCollapseButton"] button::before {{ content: "Unpin sidebar"; left: auto; right: 0; transform: none }}
+[data-testid="stExpandSidebarButton"]::before {{ content: "Pin sidebar"; left: 0; transform: none }}
 [data-testid="stSidebarCollapseButton"] button:is(:hover, :focus-visible)::before,
 [data-testid="stExpandSidebarButton"]:is(:hover, :focus-visible)::before {{ opacity: 1 }}
 .sr-ico {{ font-family: 'Material Symbols Rounded'; font-size: 20px; line-height: 1; font-weight: 400;
@@ -362,11 +362,12 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
     width: 68px !important; min-width: 68px !important; max-width: 68px !important; margin-left: 0 !important;
     transform: none !important; visibility: visible !important; overflow: hidden; z-index: 999989;
     transition: width .22s ease .12s, min-width .22s ease .12s, max-width .22s ease .12s, box-shadow .22s ease .12s }}
-  [data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible)) {{ width: 264px !important; min-width: 264px !important; max-width: 264px !important;
+  [data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible), body:has([data-testid="stExpandSidebarButton"]:hover) *) {{ width: 264px !important; min-width: 264px !important; max-width: 264px !important;
     box-shadow: 8px 0 28px rgba(23, 63, 67, 0.28); transition-delay: .08s }}
   [data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stMain"] {{ padding-left: 68px }}
   [data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stMainBlockContainer"] {{ max-width: 1480px }}
   [data-testid="stHeader"] {{ pointer-events: none }}
+  [data-testid="stHeader"] [data-testid="stToolbar"], [data-testid="stHeader"] [data-testid="stToolbar"] div {{ pointer-events: none }}
   [data-testid="stHeader"] button, [data-testid="stHeader"] a {{ pointer-events: auto }}
   [data-testid="stHeader"] [data-testid="stSidebarLogo"], [data-testid="stHeader"] img.stLogo {{ display: none }}
   [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] {{ display: none }}
@@ -375,41 +376,43 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
   [data-testid="stExpandSidebarButton"] {{ position: fixed !important; left: 17px; top: 62px;
     width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center;
     z-index: 999999; transition: left .22s ease .12s, top .22s ease .12s }}
-  body:has([data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible))) [data-testid="stExpandSidebarButton"] {{ left: 220px; top: 20px; transition-delay: .08s }}
+  body:has([data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible))) [data-testid="stExpandSidebarButton"],
+  body:has([data-testid="stSidebar"][aria-expanded="false"]):has([data-testid="stExpandSidebarButton"]:hover) [data-testid="stExpandSidebarButton"] {{ left: 220px; top: 20px; transition-delay: .08s }}
+  [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {{ padding: 14px 0 0 0 !important; margin: 0 0 0 -15px; height: 52px; min-height: 52px; justify-content: flex-start }}
   /* closed rail: everything on one centre axis */
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarHeader"] {{ padding: 14px 0 0 0 !important; margin: 0; justify-content: center;
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] {{ padding: 14px 0 0 0 !important; margin: 0; justify-content: center;
     width: 68px; height: 52px }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarHeader"] > div:first-child {{ justify-content: center; width: 100%; margin: 0 }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarHeader"] img {{ height: 34px !important; width: auto; max-width: 44px; object-fit: contain;
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] > div:first-child {{ justify-content: center; width: 100%; margin: 0 }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] img {{ height: 38px !important; width: auto; max-width: 44px; object-fit: contain;
     margin: 0 auto }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarHeader"] > div:first-child::after,
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavLink"] > span[label],
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"]:not(:has(.sr-scope)),
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) .sr-scope .sr-scope-body {{ display: none !important }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNav"] {{ padding: 40px 0 8px 0 !important; margin: 0 }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavItems"] {{ padding: 0 !important; margin: 0 }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavLinkContainer"] {{ display: flex; justify-content: center; width: 68px }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavLink"] {{ width: 44px; height: 44px; min-height: 44px; margin: 3px auto !important;
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarHeader"] > div:first-child::after,
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLink"] > span[label],
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"]:not(:has(.sr-scope)),
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope .sr-scope-body {{ display: none !important }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNav"] {{ padding: 40px 0 8px 0 !important; margin: 0 }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavItems"] {{ padding: 0 !important; margin: 0 }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLinkContainer"] {{ display: flex; justify-content: center; width: 68px }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLink"] {{ width: 44px; height: 44px; min-height: 44px; margin: 3px auto !important;
     padding: 0 !important; gap: 0; justify-content: center; align-items: center; border-radius: 10px;
     box-shadow: none !important }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavLink"] > span:first-child {{ margin: 0 !important; width: auto }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavLink"] [data-testid="stIconMaterial"] {{ font-size: 20px !important }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stNavSectionHeader"] {{ display: block !important; height: 1px; padding: 0 !important;
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLink"] > span:first-child {{ margin: 0 !important; width: auto }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavLink"] [data-testid="stIconMaterial"] {{ font-size: 20px !important }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stNavSectionHeader"] {{ display: block !important; height: 1px; padding: 0 !important;
     margin: 10px 18px !important; font-size: 0 !important; background: rgba(255, 255, 255, 0.14); overflow: hidden }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarUserContent"] {{ padding: 4px 0 !important }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) .sr-scope {{ width: 44px; height: 44px; margin: 4px auto 0 auto; padding: 0; justify-content: center;
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"] {{ padding: 4px 0 !important }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope {{ width: 44px; height: 44px; margin: 4px auto 0 auto; padding: 0; justify-content: center;
     align-items: center; background: transparent; border-radius: 10px }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) .sr-scope:hover {{ background: rgba(255, 255, 255, 0.08) }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) .sr-scope .sr-ico {{ font-size: 20px }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope:hover {{ background: rgba(255, 255, 255, 0.08) }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope .sr-ico {{ font-size: 20px }}
   /* Streamlit reserves a scrollbar gutter on both sides; a closed rail never scrolls, so the rail gets all 68px */
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarContent"] {{ scrollbar-gutter: auto !important; overflow: hidden !important }}
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarContent"] {{ scrollbar-gutter: auto !important; overflow: hidden !important }}
   /* Streamlit pads the sidebar's inner wrappers; in the closed rail every wrapper spans the full 68px instead */
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarContent"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarContent"] > div,
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNav"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavItems"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarNavItems"] li,
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarUserContent"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarUserContent"] > div {{
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarContent"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarContent"] > div,
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNav"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavItems"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarNavItems"] li,
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"], [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"] > div {{
     padding-left: 0 !important; padding-right: 0 !important; margin-left: 0 !important; margin-right: 0 !important;
     width: 68px !important; min-width: 0 !important; max-width: 68px !important }}
-  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)) [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"]:has(.sr-scope) {{
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"]:has(.sr-scope) {{
     width: 68px !important; display: flex; justify-content: center }}
 }}
 /* ---- Floating Ask Chippy: a 64px Chippy button bottom-right that opens a compact chat panel ---- */
@@ -621,7 +624,10 @@ LOGO = (f'<svg width="150" height="32" viewBox="0 0 150 32">{_MARK}'
 # The official CHIPPY silhouette logo, if its files are present; otherwise the radar mark above stays in use
 BRAND_DIR = Path(__file__).resolve().parent / "brand"
 if (BRAND_DIR / "chippy_logo_light.png").exists():
-    LOGO = LOGO_ICON = str(BRAND_DIR / "chippy_logo_light.png")
+    # inlined as a data URL: a /media/ URL lives only in the server's memory, so after a restart an open tab shows "Logo"
+    import base64
+    LOGO = LOGO_ICON = "data:image/png;base64," + base64.b64encode(
+        (BRAND_DIR / "chippy_logo_light.png").read_bytes()).decode("ascii")
 FAVICON = BRAND_DIR / "chippy_favicon.png"     # browser tab icon: local Streamlit only (Snowflake ignores page_icon)
 
 

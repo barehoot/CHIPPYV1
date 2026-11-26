@@ -549,7 +549,9 @@ def forecast_view() -> None:
                         help="On: the value axis spans the data, so small movements show. Off: it starts at zero.")
         hist = pd.DataFrame({"WEEK_END_DATE": y.index, "VALUE": y.to_numpy()})
         st.altair_chart(charts.forecast_chart(hist, results, title, f, zero=not fit), width="stretch")
-        st.caption("Solid line: history. Dashed: forecasts. Shaded: 80% band. Click a legend entry to focus one model. "
+        st.caption("Solid line: history. Dashed: forecasts, one colour per model. Light band: 80% interval. Dotted lines: "
+                   "the latest actual week, and the week under the pointer. Tinted area: the forecast period. "
+                   "Click a legend entry to focus one model. "
                    "Drag to pan, scroll to zoom, double-click to reset.")
     for name, msg in errors.items():
         st.warning(f"{name}: {msg}", icon=":material/warning:")
