@@ -366,6 +366,61 @@ def brand_panel(category: str, weeks: int = 104) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)
+def share_report(category: str, weeks: int = 4, compare: str = "previous", retailer: str | None = None) -> pd.DataFrame:
+    """The competitive share report, all in SQL: every brand's value share, change, rank and rank change, value sales
+    and growth, mean ACV, value-weighted price index, velocity (units per store per week), share of distribution points
+    (ACV x SKUs) and fair-share index, for the last N weeks against the N before ("previous") or the same weeks a year
+    ago ("year_ago"), in all retailers or one."""
+    off = weeks if compare == "previous" else 52
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
+                     b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND,
+                                  SUM(s.VALUE_SALES) AS VALUE_SALES, SUM(s.UNIT_SALES) AS UNIT_SALES,
+                                  MAX(s.ACV_DIST_PCT) AS ACV, MAX(s.STORES_SELLING) AS STORES,
+                                  COUNT_IF(s.VALUE_SALES > 0) AS SKUS,
+                                  CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX) THEN 'NOW'
+                                       WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                                        AND s.WEEK_END_DATE <= DATEADD(week, -?, w.MX) THEN 'BEFORE' END AS P
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND (? IS NULL OR s.RETAILER = ?)
+                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND, w.MX),
+                     x AS (SELECT b.*, (VALUE_SALES / NULLIF(UNIT_SALES, 0))
+                                  / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID)
+                                           / NULLIF(SUM(UNIT_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0), 0)
+                                  AS PRICE_INDEX
+                           FROM b WHERE P IS NOT NULL),
+                     g AS (SELECT BRAND, MANUFACTURER, P, SUM(VALUE_SALES) AS SALES, AVG(ACV) AS ACV,
+                                  SUM(ACV * SKUS) AS TDP, AVG(UNIT_SALES / NULLIF(STORES, 0)) AS VELOCITY,
+                                  SUM(PRICE_INDEX * VALUE_SALES) / NULLIF(SUM(IFF(PRICE_INDEX IS NULL, 0, VALUE_SALES)), 0)
+                                  AS PRICE_INDEX
+                           FROM x GROUP BY BRAND, MANUFACTURER, P),
+                     r AS (SELECT g.*, 100 * SALES / NULLIF(SUM(SALES) OVER (PARTITION BY P), 0) AS SHARE,
+                                  100 * TDP / NULLIF(SUM(TDP) OVER (PARTITION BY P), 0) AS TDP_SHARE,
+                                  RANK() OVER (PARTITION BY P ORDER BY SALES DESC) AS RNK
+                           FROM g)
+                SELECT n.BRAND, n.MANUFACTURER, n.SALES, n.ACV, n.TDP, n.VELOCITY, n.PRICE_INDEX, n.SHARE, n.TDP_SHARE,
+                       n.RNK AS RANK, o.SHARE AS SHARE_BEFORE, o.SALES AS SALES_BEFORE, o.RNK AS RANK_BEFORE,
+                       n.SHARE - o.SHARE AS SHARE_CHG_PTS, o.RNK - n.RNK AS RANK_CHG,
+                       100 * (n.SALES / NULLIF(o.SALES, 0) - 1) AS SALES_GROWTH_PCT,
+                       100 * n.SHARE / NULLIF(n.TDP_SHARE, 0) AS FAIR_SHARE_INDEX
+                FROM r n LEFT JOIN r o ON o.BRAND = n.BRAND AND o.MANUFACTURER = n.MANUFACTURER AND o.P = 'BEFORE'
+                WHERE n.P = 'NOW' ORDER BY RANK, n.BRAND""",
+             [weeks, off + weeks, off, category, retailer, retailer])
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def price_ladder(category: str, weeks: int = 4) -> pd.DataFrame:
+    """Price per unit by brand and pack size over the last N weeks, all retailers (the price ladder)."""
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK)
+                SELECT s.BRAND, s.MANUFACTURER, s.PACK_SIZE, SUM(s.VALUE_SALES) AS VALUE_SALES,
+                       SUM(s.UNIT_SALES) AS UNIT_SALES, SUM(s.VALUE_SALES) / NULLIF(SUM(s.UNIT_SALES), 0) AS PRICE_PER_UNIT
+                FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                GROUP BY s.BRAND, s.MANUFACTURER, s.PACK_SIZE
+                HAVING SUM(s.UNIT_SALES) > 0
+                ORDER BY s.PACK_SIZE, PRICE_PER_UNIT""", [category, weeks])
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
 def sku_week_panel(category: str, brand: str, weeks: int = 52) -> pd.DataFrame:
     """Week x retailer x SKU for one brand: sales, units, price per unit, distribution and stores, with the week-on-week
     changes the anomaly scan reads, all in SQL."""

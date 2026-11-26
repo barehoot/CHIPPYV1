@@ -417,3 +417,152 @@ def evidence_score(stored: dict, cp: dict | None, ci: dict | None) -> list[tuple
         ("Change point", bool(cp and cp["p"] < 0.01), _p_text(cp["p"]) if cp else "not available"),
         ("Causal effect", bool(ci and ci["p"] < 0.05), _p_text(ci["p"]) if ci else "not available"),
     ]
+
+
+# ---- Emerging shifts: moves that build before the 4-week reports show them ----------------------------------------
+
+def emerging_shifts(panel: pd.DataFrame, threshold_pts: float, min_z: float, scan_weeks: int = 16,
+                    k: float = 0.5, h: float = 5.0, period: int = 4) -> pd.DataFrame:
+    """Brand x retailer moves found before a 4-week report would show them.
+
+    Both sides read the same seasonality-free series: y = value share this week - the same week a year ago.
+    - The report view: a 4-weekly report (published at the end of each `period`-week period, counted back from the
+      latest week) on the usual last-4-weeks vs year-ago change (the 4-week mean of y). It flags a move once that
+      change is at least `threshold_pts` (MIN_SHARE_PTS) and at least `min_z` (MIN_Z) standard deviations from its
+      normal level over a 26-week baseline, and keeps flagging it to the latest report.
+    - Chippy, weekly: the same test every week (the first week of the run still flagged), or earlier when a two-sided
+      CUSUM on weekly y (slack `k`, alarm at `h`) catches a slow drift in the same direction.
+    Both use one statistical test, so the lead time comes only from the weekly cadence and the drift detector.
+    Lead time = report week - alarm week, in weeks; an alarm the report has not caught yet is an emerging shift.
+    """
+    d = panel.assign(WEEK_END_DATE=pd.to_datetime(panel.WEEK_END_DATE))
+    weeks = np.sort(d.WEEK_END_DATE.unique())
+    _need(len(weeks), 52 + 26 + scan_weeks, "Emerging-shift detection")
+    rows = []
+    for (brand, retailer), g in d.groupby(["BRAND", "RETAILER"]):
+        s = g.set_index("WEEK_END_DATE").VALUE_SHARE_PCT.reindex(weeks).astype(float)
+        if s.isna().mean() > 0.2:
+            continue
+        s = s.interpolate(limit_direction="both")
+        y = (s - s.shift(52)).dropna()
+        m4 = y.rolling(4).mean()
+        base, base4 = y.iloc[-scan_weeks - 26:-scan_weeks], m4.iloc[-scan_weeks - 26:-scan_weeks].dropna()
+        mu, sd = float(base.mean()), float(base.std(ddof=1))
+        mu4, sd4 = float(base4.mean()), float(base4.std(ddof=1))
+        if not sd or not sd4 or np.isnan(sd) or np.isnan(sd4):
+            continue
+        r4 = m4.iloc[-scan_weeks:]
+        weekly = (r4.abs() >= threshold_pts) & (((r4 - mu4) / sd4).abs() >= min_z)
+
+        def run_start(flags: pd.Series):                         # first week of the run of flags that is still on
+            if not len(flags) or not bool(flags.iloc[-1]):
+                return None
+            on = flags[::-1].cumprod()[::-1].astype(bool)
+            return on[on].index[0]
+        ends = r4.index[::-1][::period][::-1]                     # report weeks: every `period`th week back from now
+        report = run_start(weekly.loc[ends])
+        alarm = run_start(weekly)
+        sign = np.sign(r4.iloc[-1])
+        z = (y.iloc[-scan_weeks:] - mu) / sd
+        hi = lo = 0.0
+        for wk, v in z.items():                                   # slow drift in the latest direction
+            hi, lo = max(0.0, hi + v - k), min(0.0, lo + v + k)
+            if (sign > 0 and hi > h) or (sign < 0 and lo < -h):
+                alarm = wk if alarm is None or wk < alarm else alarm
+                break
+        side = "UP" if sign > 0 else "DOWN"
+        if alarm is not None and report is not None and alarm > report:     # weekly can never be later than the report
+            alarm = report
+        if alarm is None and report is None:
+            continue
+        end = report if report is not None else weeks[-1]
+        lead = int(round((pd.Timestamp(end) - pd.Timestamp(alarm)).days / 7)) if alarm is not None else None
+        rows.append({"BRAND": brand, "RETAILER": retailer,
+                     "DIRECTION": side or ("UP" if r4.iloc[-1] > 0 else "DOWN"), "ALARM_WEEK": alarm,
+                     "REPORT_WEEK": report, "LEAD_WEEKS": lead, "IN_REPORTS": report is not None,
+                     "SHARE_NOW": float(s.iloc[-1]), "L4W_VS_YA_PTS": float(r4.iloc[-1]),
+                     "DRIFT_SD": float((r4.iloc[-1] - mu4) / sd4)})
+    cols = ["BRAND", "RETAILER", "DIRECTION", "ALARM_WEEK", "REPORT_WEEK", "LEAD_WEEKS", "IN_REPORTS", "SHARE_NOW",
+            "L4W_VS_YA_PTS", "DRIFT_SD"]
+    out = pd.DataFrame(rows, columns=cols)
+    if out.empty:
+        return out.assign(STATUS=pd.Series(dtype=str))
+    out["STATUS"] = np.where(~out.IN_REPORTS, "Emerging: not in reports yet",
+                             np.where(out.LEAD_WEEKS.fillna(0) > 0, "Flagged early", "Same time as reports"))
+    order = out.STATUS.map({"Emerging: not in reports yet": 0, "Flagged early": 1, "Same time as reports": 2})
+    return out.assign(_O=order, _D=-out.DRIFT_SD.abs()).sort_values(["_O", "_D"]).drop(columns=["_O", "_D"]).reset_index(drop=True)
+
+
+# ---- Share report: competitive benchmark for one market and period ------------------------------------------------
+
+def share_report(panel: pd.DataFrame, weeks: int = 4, compare: str = "previous", retailer: str | None = None) -> pd.DataFrame:
+    """The pandas reference for data.share_report (which computes the same in SQL for the app; this one backs the
+    local preview's sample data and the tests). Every brand in the category for the last `weeks` against the `weeks` before (compare="previous") or the same
+    weeks a year ago ("year_ago"), in all retailers combined or one: value share and its change in points, rank and
+    rank change, value sales and growth, distribution (mean ACV), value-weighted price index, velocity (units per store
+    per week), share of distribution points (ACV x SKUs, TDP-style) and the fair-share index (value share / that
+    share x 100: above 100 sells more than its shelf presence)."""
+    d = panel.assign(WEEK_END_DATE=pd.to_datetime(panel.WEEK_END_DATE))
+    if retailer:
+        d = d[d.RETAILER == retailer]
+    w = np.sort(d.WEEK_END_DATE.unique())
+    back = weeks if compare == "previous" else 52
+    _need(len(w), back + weeks, "The share report")
+    now, before = w[-weeks:], (w[-2 * weeks:-weeks] if compare == "previous" else w[-52 - weeks:-52])
+
+    def block(ws) -> pd.DataFrame:
+        x = d[d.WEEK_END_DATE.isin(ws)].assign(TDP=lambda f: f.ACV_DIST_PCT * f.SKUS_SELLING,
+                                               UPS=lambda f: f.UNIT_SALES / f.STORES_SELLING.where(f.STORES_SELLING > 0))
+        g = x.groupby(["BRAND", "MANUFACTURER"])
+        out = pd.DataFrame({"SALES": g.VALUE_SALES.sum(), "ACV": g.ACV_DIST_PCT.mean(), "TDP": g.TDP.sum(),
+                            "VELOCITY": g.UPS.mean(),
+                            "PRICE_INDEX": g.apply(lambda f: np.average(f.PRICE_INDEX, weights=f.VALUE_SALES)
+                                                   if f.VALUE_SALES.sum() > 0 else np.nan, include_groups=False)})
+        out["SHARE"] = 100 * out.SALES / out.SALES.sum()
+        out["TDP_SHARE"] = 100 * out.TDP / out.TDP.sum()
+        out["RANK"] = out.SHARE.rank(ascending=False, method="min").astype(int)
+        return out
+    a, b = block(now), block(before)
+    r = a.join(b[["SHARE", "SALES", "RANK"]], rsuffix="_BEFORE", how="left")
+    r["SHARE_CHG_PTS"] = r.SHARE - r.SHARE_BEFORE
+    r["RANK_CHG"] = r.RANK_BEFORE - r.RANK                       # positive: moved up
+    r["SALES_GROWTH_PCT"] = 100 * (r.SALES / r.SALES_BEFORE.where(r.SALES_BEFORE > 0) - 1)
+    r["FAIR_SHARE_INDEX"] = 100 * r.SHARE / r.TDP_SHARE.where(r.TDP_SHARE > 0)
+    return r.reset_index().sort_values("RANK").reset_index(drop=True)
+
+
+# ---- Scenario simulator: Monte Carlo on the brand's own elasticities ----------------------------------------------
+
+def simulate(panel: pd.DataFrame, brand: str, el: dict, price_pct: float, dist_pts: float, weeks: int = 4,
+             n: int = 4000) -> dict:
+    """Weekly value sales and category value share if the brand changes price by `price_pct` % and distribution by
+    `dist_pts` ACV points, competitors unchanged. Elasticities are drawn from their sampling distribution (normal,
+    from the 95% intervals) n times, so the answer is a range: P10, median, P90."""
+    wk = brand_weekly(panel, brand)
+    _need(len(wk), weeks, "The simulator")
+    rng = np.random.default_rng(SEED)
+    v0 = float(wk.VALUE_SALES.tail(weeks).mean())
+    tot0 = float((wk.VALUE_SALES / (wk.VALUE_SHARE_PCT / 100)).tail(weeks).mean())
+    acv0 = float(wk.ACV_DIST_PCT.tail(weeks).mean())
+    acv1 = float(np.clip(acv0 + dist_pts, 1, 100))
+    se = lambda t: max((t["hi"] - t["lo"]) / 3.92, 1e-9)        # noqa: E731
+    ep = rng.normal(el["price"]["coef"], se(el["price"]), n)
+    ed = rng.normal(el["dist"]["coef"], se(el["dist"]), n)
+    p = 1 + price_pct / 100
+    units = p ** ep * (acv1 / acv0) ** ed
+    v1 = v0 * units * p
+    share1 = 100 * v1 / (tot0 - v0 + v1)
+    q = lambda x: np.percentile(x, [10, 50, 90])                 # noqa: E731
+    return {"value_now": v0, "share_now": 100 * v0 / tot0, "acv_now": acv0, "acv_new": acv1,
+            "value": q(v1), "value_change": q(v1 - v0), "share": q(share1), "share_change": q(share1 - 100 * v0 / tot0),
+            "draws": pd.DataFrame({"VALUE_CHANGE": v1 - v0, "SHARE_CHANGE": share1 - 100 * v0 / tot0}),
+            "p_gain": float((v1 > v0).mean())}
+
+
+def price_ladder(ladder: pd.DataFrame) -> pd.DataFrame:
+    """Price per unit by brand and pack, with each pack's index against the category's value-weighted price for the
+    same pack size (100 = the category average for that pack)."""
+    d = ladder.copy()
+    cat = d.groupby("PACK_SIZE").apply(lambda f: f.VALUE_SALES.sum() / f.UNIT_SALES.sum(), include_groups=False)
+    d["PACK_INDEX"] = 100 * d.PRICE_PER_UNIT / d.PACK_SIZE.map(cat)
+    return d

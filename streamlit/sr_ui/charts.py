@@ -577,3 +577,61 @@ def pl_risk(shifts: pd.DataFrame, names: dict, money: str = "", focus: str | Non
     fig.update_xaxes(title="Confidence (stored)", range=[0, 1.1])
     fig.update_yaxes(title="Value at stake" + (f" ({money})" if money else ""), range=[0, 1.22 * float(d.ABS.max() or 1)])
     return _pl(fig, 420, legend=False)
+
+
+def pl_hist(values: pd.Series, title: str, marks: dict[str, float] | None = None):
+    """A histogram of simulated outcomes with labelled reference lines (P10, median, P90); losses in terracotta."""
+    import plotly.graph_objects as go
+    v = pd.Series(values).dropna()
+    fig = go.Figure(go.Histogram(x=v, nbinsx=40, marker_color=TEAL if v.median() >= 0 else TERRA, opacity=0.8,
+                                 hovertemplate=f"{title}: %{{x:,.2f}}<br>Draws: %{{y}}<extra></extra>"))
+    for label, x in (marks or {}).items():
+        fig.add_vline(x=x, line=dict(color=GOLD if label == "Median" else SLATE, dash="dot", width=2),
+                      annotation_text=label, annotation_position="top")
+    fig.add_vline(x=0, line=dict(color=DEEP, width=1))
+    fig.update_xaxes(title=title)
+    fig.update_yaxes(title="Simulations")
+    return _pl(fig, 300, legend=False)
+
+
+def pl_fair_share(rep: pd.DataFrame, focus: str | None = None):
+    """Value share (y) against share of distribution points (x) per brand, with the fair-share line y = x: above it a
+    brand sells more than its shelf presence, below it less. Bubble size is value sales; the focus brand is ringed."""
+    import plotly.graph_objects as go
+    m = float(max(rep.SHARE.max(), rep.TDP_SHARE.max()) * 1.15)
+    fig = go.Figure([go.Scatter(x=[0, m], y=[0, m], mode="lines", line=dict(color=SEA, dash="dot"), name="Fair share",
+                                hoverinfo="skip")])
+    size = 14 + 30 * (rep.SALES / rep.SALES.max()) ** 0.5
+    fig.add_trace(go.Scatter(x=rep.TDP_SHARE, y=rep.SHARE, mode="markers+text", text=rep.BRAND, textposition="top center",
+                             marker=dict(size=size, color=[TERRA if i < 100 else TEAL for i in rep.FAIR_SHARE_INDEX],
+                                         opacity=0.8, line=dict(color=[GOLD if b == focus else WHITE for b in rep.BRAND],
+                                                                width=[4 if b == focus else 1 for b in rep.BRAND])),
+                             customdata=rep.FAIR_SHARE_INDEX, name="Brands",
+                             hovertemplate="%{text}<br>Share of distribution %{x:.1f}%<br>Value share %{y:.1f}%"
+                                           "<br>Fair-share index %{customdata:.0f}<extra></extra>"))
+    fig.update_xaxes(title="Share of distribution points, % (ACV x SKUs)", range=[0, m])
+    fig.update_yaxes(title="Value share, %", range=[0, m])
+    return _pl(fig, 400, legend=False)
+
+
+def pl_ladder(ladder: pd.DataFrame, focus: str | None = None):
+    """The price ladder: price per unit for each brand at each pack size, one line per brand, the focus brand bold."""
+    import plotly.graph_objects as go
+    def size(s) -> float:                                        # grams or millilitres, so 1.5kg sorts after 500g
+        import re as _re
+        m = _re.match(r"\s*([\d.]+)\s*(kg|g|l|ml|cl)?", str(s).lower())
+        if not m:
+            return float("inf")
+        return float(m.group(1)) * {"kg": 1000, "l": 1000, "cl": 10}.get(m.group(2) or "", 1)
+    order = sorted(ladder.PACK_SIZE.unique(), key=size)
+    fig = go.Figure()
+    for i, (brand, g) in enumerate(ladder.groupby("BRAND")):
+        g = g.set_index("PACK_SIZE").reindex(order).dropna(subset=["PRICE_PER_UNIT"]).reset_index()
+        fig.add_trace(go.Scatter(x=g.PACK_SIZE, y=g.PRICE_PER_UNIT, mode="lines+markers", name=brand,
+                                 line=dict(color=CAT[i % len(CAT)], width=4 if brand == focus else 2),
+                                 marker=dict(size=10 if brand == focus else 7), customdata=g.PACK_INDEX,
+                                 hovertemplate=f"{brand} · %{{x}}<br>Price per unit %{{y:,.2f}}<br>Index vs pack average "
+                                               "%{customdata:.0f}<extra></extra>"))
+    fig.update_xaxes(title="Pack size", categoryorder="array", categoryarray=order)
+    fig.update_yaxes(title="Price per unit")
+    return _pl(fig, 360)

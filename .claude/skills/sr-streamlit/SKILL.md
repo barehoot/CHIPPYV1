@@ -23,11 +23,14 @@ description: Rules for the two Share Radar Streamlit in Snowflake apps (read-onl
 - Draw charts only through sr_ui/charts.py: zero baselines, signed labels, tooltips, the palette constants.
   Bars keep a zero baseline; line charts may fit the axis to the data when the viewer chooses.
   Insight Studio's Plotly charts (pl_* in charts.py) are the only Plotly in the app; give them no key unless they
-  are selectable, and make selection opt-in (AppTest cannot rerun keyed or selectable Plotly charts, date
-  select_sliders or download buttons; decision B21).
+  are selectable, and make selection opt-in (AppTest cannot rerun keyed or selectable Plotly charts or date
+  select_sliders; decision B21).
 - Every page calls nav.entry_guard("pages/<file>") right after its imports, so direct links open inside the app.
 - Insight Studio models live in sr_ui/analytics.py (pure, unit-tested) and are labelled exploratory; they never
   feed the brief. Aggregates they need come from SQL in data.py.
+- sr_ui/studio.py and sr_ui/intel.py reach sr_ui.data through a call-time proxy, never a module-level import.
+- The Intelligence brief writes numbers only as [Fnn] fact tokens (sr_ui/intel.py); never type a figure into it.
+- demo/groq_agent.py is local-preview only: never import it from streamlit/, never deploy it, never store its key.
 - On error, show a short message and a retry button. Never show a stack trace in the read-only app.
 
 ## Deploy

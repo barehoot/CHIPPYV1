@@ -213,7 +213,120 @@ def checks() -> None:
                 st.dataframe(pd.DataFrame(v), hide_index=True, width="stretch")
 
 
+# ---- Intelligence brief (SR-065): the run, Radar, Shift Detail and Insight Studio in one narrative -------------------
+
+@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+def _pack(run_id: str, category: str, masked_: bool, cur_: str, markets: tuple):
+    from sr_ui import intel
+    return intel.build_pack(run_id, category, masked_, cur_, dict(markets))
+
+
+def intelligence() -> None:
+    from sr_ui import intel
+    pk = _pack(b["RUN_ID"], str(data.cfg("SCOPE_CATEGORY")), masked, cur, tuple(sorted(data.market_names().items())))
+    cache = st.session_state.setdefault("sr_intel", {})
+    key = f"{bid}|{pk.key()}"
+    if key not in cache:
+        with st.spinner("Chippy is writing the intelligence brief…"):
+            cache[key] = intel.narrative(pk)
+    secs, generator = cache[key]
+    run = data.current_run()
+    with st.container(key="sr_intel_bar", horizontal=True, vertical_alignment="center", gap="small"):
+        st.html(f'<div class="sr-brief-meta"><span>{escape(generator)}</span><span>Built from the weekly run, Radar, Shift '
+                'Detail and Insight Studio</span><em class="sr-ctx-chip warn">Exploratory · the weekly brief is the record'
+                '</em></div>', width="content")
+        with st.container(horizontal=True, horizontal_alignment="right", gap="small"):
+            if getattr(data, "narrate", None) is not None and st.button("Rewrite", key="sr_intel_rewrite",
+                                                                        icon=":material/autorenew:", type="tertiary"):
+                cache.pop(key, None)
+                st.rerun()
+            with st.popover("Copy", icon=":material/content_copy:"):
+                st.code("\n\n".join(f"{s.upper()}\n{intel.plain(secs[s], pk)}" for s in intel.OUTLINE),
+                        language=None, wrap_lines=True)
+    if run is not None and run.run_id != b["RUN_ID"]:
+        st.caption("This brief is from an earlier run; model sections read the latest weekly panel.")
+    with st.container(key="sr_intel_body"):
+        st.html(f'<div class="sr-intel-exec"><span class="k">Executive summary</span><p>'
+                f'{intel.render(secs["Executive summary"], pk)}</p></div>')
+        for sec in intel.OUTLINE[1:]:
+            st.html(f'<div class="sr-intel-sec"><h3>{escape(sec)}</h3><p>{intel.render(secs[sec], pk)}</p></div>')
+            if sec == "What moved" and pk.shifts:
+                st.html('<div class="sr-intel-cards">' + "".join(
+                    f'<div class="sr-intel-card"><b>{escape(d["brand"])}</b><span>{escape(d["market"])} · {escape(d["cmp"])}</span>'
+                    f'<em>{intel.render(d["pts"], pk)}</em><dl>'
+                    + "".join(f"<dt>{escape(k)}</dt><dd>{intel.render(v, pk)}</dd>" for k, v in (
+                        ("Value at stake", d["vas"]), ("Main driver", f'{d.get("driver", "–")} {d.get("driver_pts", "")}'),
+                        ("Evidence", d.get("evidence", "–")), ("Sales gap (model)", d.get("effect", "–")),
+                        ("Top action (model)", d.get("action_v", "–"))))
+                    + "</dl></div>" for d in pk.shifts) + "</div>")
+            if sec == "Recommended actions" and pk.actions:
+                st.dataframe(nav.striped(pd.DataFrame(pk.actions)), hide_index=True, width="stretch", row_height=34)
+    with st.expander("Methods and sources: every figure in this brief", icon=":material/fact_check:"):
+        st.dataframe(pd.DataFrame([{"Fact": k, "What": v["label"], "Value": v["text"], "Source": v["source"],
+                                    "Model estimate": "yes" if v["model"] else ""} for k, v in pk.facts.items()]),
+                     hide_index=True, width="stretch")
+        st.caption("Numbers are locked: the narrative writes every figure as a fact token, and the page fills in the "
+                   "value from this table. A section that types a number itself is replaced by the template.")
+
+
+def share_report() -> None:
+    """The automated share report: every brand in the category, one market and period, ready to send."""
+    from sr_ui import studio
+    cat = str(data.cfg("SCOPE_CATEGORY"))
+    retailers = sorted(studio._panel(cat, masked).RETAILER.unique())
+    c1, c2, c3 = nav.stack("sr_rep_ctl").columns([1, 1.4, 1.4], vertical_alignment="bottom")
+    weeks = c1.selectbox("Period", [4, 12, 52], key="rep_weeks", format_func=lambda w: f"Last {w} weeks")
+    compare = c2.selectbox("Compared with", ["year_ago", "previous"], key="rep_cmp",
+                           format_func={"year_ago": "Same weeks a year ago", "previous": "The weeks before"}.get)
+    rets = ["All retailers"] + retailers
+    where = c3.selectbox("Market", rets, key="rep_ret")
+    r = studio._shown(data.share_report(cat, int(weeks), compare, None if where == "All retailers" else where))
+    if r.empty:
+        st.info("No sales in this market and period.", icon=":material/info:")
+        return
+    period = f"last {weeks} weeks vs {'the same weeks a year ago' if compare == 'year_ago' else f'the {weeks} weeks before'}"
+    lead = r.iloc[0]
+    mover = r.reindex(r.SHARE_CHG_PTS.abs().sort_values(ascending=False).index).iloc[0]
+    st.html(f'<div class="sr-takeaway"><span class="sr-ico" aria-hidden="true">lightbulb</span><div><span class="k">'
+            f'{escape(where)} · {escape(cat)} · {escape(period)}</span><p>{escape(str(lead.BRAND))} leads with '
+            f'{escape(fmt.pct(lead.SHARE / 100))} value share. The biggest mover is {escape(str(mover.BRAND))} '
+            f'({escape(fmt.pts(mover.SHARE_CHG_PTS))}), rank {int(mover.RANK)}.</p></div></div>')
+    table = pd.DataFrame({
+        "Rank": r.RANK, "Move": r.RANK_CHG.map(lambda v: "–" if pd.isna(v) or v == 0 else ("▲ " if v > 0 else "▼ ") + f"{abs(int(v))}"),
+        "Brand": r.BRAND, "Manufacturer": r.MANUFACTURER, "Value share": (r.SHARE / 100).map(fmt.pct),
+        "Change": r.SHARE_CHG_PTS.map(fmt.pts), "Value sales": r.SALES.map(lambda v: fmt.money(v, cur)),
+        "Sales growth": (r.SALES_GROWTH_PCT / 100).map(fmt.signed_pct), "ACV %": r.ACV.round(1),
+        "Price index": r.PRICE_INDEX.round(2), "Velocity": r.VELOCITY.round(2),
+        "Fair-share index": r.FAIR_SHARE_INDEX.round(0)})
+    with nav.card("sr_rep_table"):
+        nav.section("Competitive share report", "Velocity: units per store per week. Fair-share index: value share / share "
+                    "of distribution points x 100 (above 100 sells more than its shelf presence).")
+        st.dataframe(nav.striped(table), hide_index=True, width="stretch", row_height=34)
+        from sr_ui import charts
+        st.plotly_chart(charts.pl_bars_h(r.sort_values("SHARE_CHG_PTS", ascending=False)[["BRAND", "SHARE_CHG_PTS"]],
+                                         "BRAND", "SHARE_CHG_PTS", "Share change, pts", signed=True, fmt=".2f"),
+                        config=charts.PLOTLY_CONFIG, width="stretch")
+    html = ("<html><head><meta charset='utf-8'><title>Share report</title><style>body{font-family:Inter,Arial,sans-serif;"
+            "color:#173f43;margin:32px}table{border-collapse:collapse;width:100%}th,td{padding:6px 10px;border-bottom:1px "
+            "solid #dcebe8;text-align:right}th{background:#173f43;color:#fff}td:nth-child(3),td:nth-child(4),th:nth-child(3),"
+            "th:nth-child(4){text-align:left}</style></head><body>"
+            f"<h1>Competitive share report</h1><p>{escape(cat)} · {escape(where)} · {escape(period)}</p>"
+            + table.to_html(index=False, escape=True) + "<p>Generated by Chippy from the weekly panel. Exploratory: the "
+            "weekly brief is the record.</p></body></html>")
+    st.download_button("Download the report (HTML)", html.encode("utf-8"), "chippy_share_report.html", "text/html",
+                       icon=":material/download:")
+
+
 nav.guarded("Brief toolbar", toolbar)
-nav.guarded("Brief", report)
-nav.guarded("Sources", sources)
-nav.guarded("Checks", checks)
+with st.container(key="sr_brief_view"):
+    view = st.radio("Brief view", ["record", "intel", "report"], horizontal=True, key="brief_view",
+                    label_visibility="collapsed", format_func={"record": "Weekly brief (of record)",
+                                                               "intel": "Intelligence brief", "report": "Share report"}.get)
+if view == "intel":
+    nav.guarded("Intelligence brief", intelligence)
+elif view == "report":
+    nav.guarded("Share report", share_report)
+else:
+    nav.guarded("Brief", report)
+    nav.guarded("Sources", sources)
+    nav.guarded("Checks", checks)

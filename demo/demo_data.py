@@ -87,6 +87,14 @@ def install() -> None:
     _fake.ask_agent = _no_live_ai
     _fake.AI_UNAVAILABLE_REASON = ("Live AI is unavailable in the local preview: no Snowflake session is connected, "
                                    "so Chippy cannot answer here.")
+    import groq_agent                                         # Ask Chippy on Groq, when a key is configured locally
+    if groq_agent.configured():
+        _fake.ask_agent = groq_agent.ask_agent
+        _fake.narrate = groq_agent.narrate
+        _fake.chart_spec = groq_agent.chart_spec
+        _fake.AI_UNAVAILABLE_REASON = None
+        _fake.AI_PREVIEW_NOTE = (f"Local preview: answers come from {groq_agent.model()} on Groq, using tools over the "
+                                 "sample data. In Snowflake, Ask Chippy uses the Cortex agents.")
     sys.modules["sr_ui.data"] = _fake
     sr_ui.data = _fake
 

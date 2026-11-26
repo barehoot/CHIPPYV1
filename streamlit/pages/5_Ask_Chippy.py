@@ -97,6 +97,9 @@ unavailable = getattr(data, "AI_UNAVAILABLE_REASON", None)
 if unavailable:
     st.html('<div class="sr-dock-notice sr-ask-notice" role="status"><span class="sr-ico" aria-hidden="true">info</span>'
             f'<span>{escape(unavailable)} You can still choose an agent and see where Auto would send a question.</span></div>')
+elif getattr(data, "AI_PREVIEW_NOTE", None):                     # local preview with a stand-in LLM (demo only)
+    st.html('<div class="sr-dock-notice sr-ask-notice" role="status"><span class="sr-ico" aria-hidden="true">science</span>'
+            f'<span>{escape(data.AI_PREVIEW_NOTE)}</span></div>')
 
 
 def _target(question: str) -> tuple[str, str | None]:

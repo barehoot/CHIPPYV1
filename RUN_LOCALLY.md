@@ -55,8 +55,19 @@ streamlit run streamlit/demo_chippy_admin.py --server.port 8502      (in a secon
   week to compare.
 - **Future Trends** runs all four models, including TCN (PyTorch is in `requirements-demo.txt`). The first TCN fit
   takes about 10 seconds; after that it is cached. Without PyTorch, TCN is left unticked and the other three run.
-- **Ask Chippy** needs the Snowflake agent, so it is switched off locally: the panel says live AI is
-  unavailable and sends nothing. No sample answers are shown.
+- **Ask Chippy** uses the Snowflake agents in production. Locally it can answer with an LLM on Groq, over the sample
+  data: put your key in `~/.streamlit/secrets.toml` (in your home folder, never in this project):
+
+  ```
+  GROQ_API_KEY = "gsk_..."
+  GROQ_MODEL = "openai/gpt-oss-120b"
+  GROQ_FALLBACK_MODEL = "openai/gpt-oss-20b"
+  ```
+
+  Restart the apps. Without a key, Ask Chippy says live AI is unavailable and sends nothing. With one, the
+  Intelligence brief can also be rewritten by the LLM and "Ask this chart" uses it; every number stays locked to
+  the data.
+- **Weekly Brief** has three views: the stored brief, the Intelligence brief and the Share report.
 - A small "Local preview · sample data" label at the top of every page marks the preview mode. The sample
   data lives in `demo/` and `python/tests/`, separate from the app; nothing here is production data.
 - **Load next week**, **Rerun this week**, **Reset to week** and **Save** (Settings) don't change anything. They only

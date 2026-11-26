@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from sr_ui import charts, data, format as fmt, market_view, nav, workspace
+from sr_ui import charts, data, format as fmt, market_view, nav, studio, workspace
 nav.entry_guard("pages/0_Radar.py")   # a refresh or direct link still opens inside the app
 
 N_STEPS = 14
@@ -667,6 +667,7 @@ with st.container(key="sr_radar_detail"):
     if current is not None:
         with st.container(key="sr_stack_radar_lower", gap="small"):          # stacked, both full width
             nav.guarded("Detected Market Shifts", lambda: detected_shifts(current))
+            nav.guarded("Emerging Shifts", lambda: studio.emerging_radar(current))
             nav.guarded("Market Momentum", lambda: market_momentum(current))
         nav.guarded("All candidates", lambda: all_candidates(current))
     if nav.is_admin():

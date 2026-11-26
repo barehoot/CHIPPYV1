@@ -8,3 +8,5 @@ __pycache__/
 python/build/
 tests/local/out/
 .venv/
+secrets.toml
+.env*

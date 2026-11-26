@@ -49,6 +49,19 @@ Every lens has "Explain this with Chippy" (opens Ask Chippy with a question abou
 the shares, prices, price index and week-on-week changes). Fits are cached per shift for the session TTL; the driver
 model takes about a second, the rest under half a second on the sample data.
 
+### 2b. Round 2 (SR-065): Intelligence brief, Share report, Emerging shifts, local AI
+
+- **Weekly Brief** views: *Weekly brief (of record)*, *Intelligence brief* (executive summary, what moved with a card per
+  shift, emerging shifts, held back, competitive landscape, outlook, recommended actions with owners, and a methods
+  table of every fact and its source) and *Share report* (all brands, any period, comparison and retailer; rank change,
+  velocity, fair-share index; HTML export). Decisions B26, B28.
+- **Emerging Shifts**: a Radar card and an Insight Studio lens: moves the weekly scan finds before a 4-week report would
+  (B27).
+- **Studio additions**: scenario simulator (Company Manager), fair share and price ladder (Analytics Manager), Ask this
+  chart (Data Analyst), time to insight (Analytics Director).
+- **Local AI** (preview only): Ask Chippy, the Intelligence brief rewrite and Ask this chart use Groq when a key is set in
+  `~/.streamlit/secrets.toml` (B25). Production keeps the Cortex agents and a template-only Intelligence brief.
+
 **Workspace is session only.** Watchlist, Case Files, notes and statuses live in `st.session_state["sr_ws"]`
 (`sr_ui/workspace.py`). Nothing is written to Snowflake, so they are lost when the browser tab closes.
 
@@ -161,7 +174,7 @@ pipeline deployment order is in `README.md`.
 
 ### Insight Studio and Ask Chippy follow-up (26 November 2026, SR-065)
 
-- `pytest -q python/tests tests/local`: 213 passed, 0 skipped (PyTorch now installed, so the TCN test runs), 1 deselected. New: `python/tests/test_analytics.py`
+- `pytest -q python/tests tests/local`: 247 passed, 0 skipped, 1 deselected. New: `python/tests/test_analytics.py`
   (each model recovers what the synthetic panel plants: elasticities, the distribution loss and its date, the
   competitor that took the share, the planted SKU spike; the Auto rule) and SR-065 cases in `test_ui_pages.py` (every
   lens, model and workbench chart type; Save to Case file; Auto routing; the panel's agent switch; pulse timing; the

@@ -70,3 +70,13 @@ Decisions B19 to B24 in `docs/decisions.md`.
 
 Rollback: restore `streamlit/` and the two package files from the commit before this change and redeploy both apps.
 Nothing in Snowflake needs undoing.
+
+## Round 2: Groq local preview, Intelligence brief, Share report, Emerging shifts (26 November 2026, SR-065)
+
+Backend impact: none beyond one more read-only `SELECT` in `data.py` (`price_ladder`, plus `portfolio`). Decisions
+B25 to B28.
+
+| Change | Files |
+| --- | --- |
+| Added | `demo/groq_agent.py` (local preview only), `streamlit/sr_ui/intel.py`, `python/tests/test_groq_agent.py` |
+| Modified | `pages/2_Brief.py` (three views), `pages/0_Radar.py` (Emerging Shifts card), `pages/5_Ask_Chippy.py` (preview notice), `sr_ui/studio.py`, `sr_ui/analytics.py`, `sr_ui/charts.py`, `sr_ui/data.py`, `sr_ui/radar.css`, `demo/demo_data.py`, tests, docs, `.gitignore` |

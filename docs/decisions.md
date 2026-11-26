@@ -122,9 +122,9 @@ they are measured, never estimated.
   lazily so pages that never open the studio never import it. Altair stays for every existing chart; the trend,
   forecast and decomposition charts gained drag-to-pan and scroll-to-zoom on the week axis.
 - **B21 Test-harness limits shape three widgets (as B17).** AppTest 1.51 cannot rerun a page after it drew a keyed or
-  selectable Plotly chart, a `select_slider` of dates or a `download_button`. So non-selecting Plotly charts carry no
-  key, box/lasso selection is opt-in behind a "Select points" toggle, date ranges use `st.slider`, and the workbench's
-  CSV comes from the table's own download menu. AppTest also replays a radio's stale value after a button callback
+  selectable Plotly chart or a `select_slider` of dates (a `download_button` was first suspected and is fine). So non-selecting Plotly charts carry no
+  key, box/lasso selection is opt-in behind a "Select points" toggle and date ranges use `st.slider`. The workbench's
+  CSV comes from the table's own download menu; the Share report uses a download button for its HTML export. AppTest also replays a radio's stale value after a button callback
   changed it, so the "Ask the other agent" re-ask is verified in a browser rather than in AppTest.
 - **B22 Chippy animates at intervals, from the supplied frames.** This replaces the handover's "supplied WebP files,
   not regenerated assets" for idle states only. `scripts/build_mascot_pulse.py` rebuilds the supplied
@@ -145,3 +145,29 @@ they are measured, never estimated.
   app) and a crash on Shift Detail. Every page now calls `nav.entry_guard`, which sends that first visit through the
   entry script and reopens the asked-for page with its query (for example `?view=`); a page the app does not list
   falls back to Radar. File names and URL paths are unchanged.
+- **B25 Local preview answers with Groq; Snowflake keeps Cortex.** With no Snowflake session, `demo/demo_data.py` swaps
+  `data.ask_agent` for `demo/groq_agent.py` when `GROQ_API_KEY` is set in `~/.streamlit/secrets.toml` or the environment
+  (never in the repository; `.gitignore` covers `secrets.toml` and `.env*`). The agent calls tools that mirror the
+  Cortex agents' tools over the sample data, and locks numbers: a figure no tool returned is sent back once, then shown
+  with a warning. Nothing under `demo/` is deployed, and the deployed apps never call an outside LLM (no external
+  access integration; `AI_COMPLETE` stays in `SP_WRITE_BRIEF` only).
+- **B26 The Intelligence brief is a numbers-locked view, not a second brief of record.** Weekly Brief gains two views
+  beside the stored brief: Intelligence brief and Share report. `sr_ui/intel.py` builds a pack of numbered facts from
+  the run, Radar, Shift Detail and Insight Studio (model facts flagged); narratives write numbers only as `[Fnn]`
+  tokens; the page renders them and rejects any section that types a digit outside a token or a known name, adds a
+  sign or unit to a fact, or uses a model figure without calling it an estimate. The template writes the same way;
+  in the local preview an LLM may rewrite it, section by section, under the same checks. In Snowflake the view is
+  template-only.
+- **B27 Emerging shifts: one test, two cadences.** `analytics.emerging_shifts` runs the weekly run's own gates
+  (`MIN_SHARE_PTS`, `MIN_Z`, from settings) on the last-4-weeks-vs-year-ago share change of every brand at every
+  retailer, every week, plus a CUSUM for slow drift, and compares that with a 4-weekly report applying the same test.
+  The lead time therefore comes from cadence and drift detection, never from a looser test, and is never negative.
+  Shown as a Radar card and an Insight Studio lens.
+- **B28 More studio tools.** Share report (competitive benchmark with rank change, velocity and fair-share index; HTML
+  export), scenario simulator (Monte Carlo on the brand's own elasticities), fair share and price ladder (one new
+  SELECT-only read, `data.price_ladder`), Ask this chart (keyword rule, or the local preview's LLM; every value checked
+  against the workbench's options), and time to insight from the run's own timestamps. The Share report is computed in
+  SQL (`data.share_report`; `analytics.share_report` is the pandas reference that backs the sample data and a test
+  proving the two agree). The priority list's "material change" sizes are display heuristics for ranking plays, not
+  gates: the price index uses the `EW_PRICE_RISE` setting; distribution (2 ACV points) and units per store (5%) are
+  fixed in `studio.MATERIAL` until settings exist for them. The Radar's Emerging Shifts card scans on demand.

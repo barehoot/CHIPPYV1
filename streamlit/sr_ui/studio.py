@@ -20,13 +20,25 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from sr_ui import analytics as an, charts, data, format as fmt, nav, workspace
+from sr_ui import analytics as an, charts, format as fmt, nav, workspace
+
+
+class _Data:
+    """sr_ui.data looked up at call time, like nav and format do, so whichever data module is installed (Snowflake, or
+    the local preview's sample data) is the one used, whatever was installed when this module was first imported."""
+    def __getattr__(self, name):
+        from sr_ui import data as current
+        return getattr(current, name)
+
+
+data = _Data()
 
 LENSES = {"director": ("Analytics Director", "Is this worth my attention, and how sure are we?"),
           "manager": ("Company Manager", "What does it cost, why, and what do we do on Monday?"),
           "amanager": ("Analytics Manager", "Where is it concentrated, which lever, and who does what?"),
           "analyst": ("Data Analyst", "Slice it any way you like: build, select, draw, pivot and export."),
-          "scientist": ("Data Scientist", "Models that explain the move, with fit, uncertainty and assumptions.")}
+          "scientist": ("Data Scientist", "Models that explain the move, with fit, uncertainty and assumptions."),
+          "early": ("Emerging Shifts", "Which moves are building before the 4-week reports show them?")}
 MODELS = {"elasticity": "Elasticity", "causal": "Causal impact", "changepoint": "Change point",
           "drivers": "Driver model · ML", "segments": "Segments · ML", "anomaly": "Anomaly scan · ML",
           "cannibal": "Cannibalisation"}
@@ -36,8 +48,10 @@ MEASURE_LABELS = {"VALUE_SALES": "Value sales", "UNIT_SALES": "Unit sales", "VOL
                   "SALES_WOW": "Sales change week on week", "PRICE_WOW": "Price change week on week",
                   "ACV_WOW": "Distribution change, pts", "UNITS_PER_STORE": "Units per store"}
 DIM_LABELS = {"WEEK_END_DATE": "Week", "RETAILER": "Retailer", "REGION": "Region", "BRAND": "Brand",
-              "MANUFACTURER": "Manufacturer", "ITEM_DESC": "SKU", "SEGMENT": "Segment", "PACK_SIZE": "Pack"}
+              "MANUFACTURER": "Manufacturer", "BRAND_RETAILER": "Brand · retailer", "ITEM_DESC": "SKU",
+              "SEGMENT": "Segment", "PACK_SIZE": "Pack"}
 AGGS = {"Sum": "sum", "Average": "mean", "Median": "median", "Max": "max", "Min": "min"}
+MATERIAL = {"Distribution, pts": 2.0, "Units per store, %": 5.0}   # display heuristics (B28); price: EW_PRICE_RISE
 PLAY = {"Distribution, pts": "Ranging and listing conversation with the buyer",
         "Price index": "Price-gap review against the competitors on shelf",
         "Units per store, %": "Shelf visibility, availability and promotion at store level",
@@ -81,6 +95,12 @@ def _sku_panel(category: str, real_brand: str, masked: bool) -> pd.DataFrame:
         order = {p: f"SKU {i}" for i, p in enumerate(sorted(k.PRODUCT_ID.astype(str).unique()), 1)}
         k = k.assign(ITEM_DESC=k.PRODUCT_ID.astype(str).map(order))
     return k
+
+
+@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+def _ladder(category: str, masked: bool) -> pd.DataFrame:
+    lad = data.price_ladder(category, 4)
+    return an.price_ladder(_shown(lad)) if len(lad) else lad
 
 
 @st.cache_data(ttl=data.TTL_S, show_spinner=False)
@@ -183,6 +203,7 @@ def director(c: Ctx) -> None:
             ("Confirmed by the anomaly model", f"{int(pf.get('N_CONFIRMED', 0))} of {n}", "shifts in the brief", ""),
             ("Possible data effects", f"{int(pf.get('N_DATA_EFFECT', 0))}", "in the brief: verify before acting",
              "neg" if pf.get("N_DATA_EFFECT") else "")])
+    nav.guarded("Time to insight", lambda: _time_to_insight(c))
     left, right = nav.stack("studio_dir").columns([3, 2])
     with left, nav.card("studio_risk"):
         nav.section("Risk matrix", "Every shift past the gates this run (all comparisons and markets): confidence "
@@ -217,6 +238,18 @@ def director(c: Ctx) -> None:
                  f"{fmt.money(c.s['VALUE_AT_STAKE'], c.cur)} at stake; {passed} of 4 checks support it. {verdict}")
         st.html(f'<div class="sr-board-line"><span class="k">Board line</span>{escape(board)}</div>')
     _actions_row(c, "dir", board, f"How confident should we be in the {c.brand} shift, and what would change that?")
+
+
+def _time_to_insight(c: Ctx) -> None:
+    """Days to minutes, measured: the weekly run's own timestamps, from start to the brief being published."""
+    r = c.run
+    run_min = (pd.Timestamp(r.ended_at) - pd.Timestamp(r.started_at)).total_seconds() / 60 if r.ended_at is not None else None
+    pub = data.brief(r.brief_id).get("PUBLISHED_AT") if r.brief_id else None
+    to_brief = (pd.Timestamp(pub) - pd.Timestamp(r.started_at)).total_seconds() / 60 if pub is not None else None
+    show = lambda m: "–" if m is None or pd.isna(m) else (f"{m:.0f} min" if m >= 1 else "under 1 min")   # noqa: E731
+    st.html('<div class="sr-tti"><span class="sr-ico" aria-hidden="true">timer</span><b>Time to insight</b>'
+            f'<span>Weekly run <em>{escape(show(run_min))}</em></span><span>Data in to brief published <em>'
+            f'{escape(show(to_brief))}</em></span><span>Manual review baseline <em>to be measured (SR-060)</em></span></div>')
 
 
 # ---- Company Manager ----------------------------------------------------------------------------------------------
@@ -261,6 +294,8 @@ def manager(c: Ctx) -> None:
                 f'<div class="sr-action-v"><b class="pos">{escape(fmt.money(r.VALUE_PER_WEEK, c.cur))}</b>'
                 f'<span>per week · {r.UPLIFT_PCT:+.1f}%</span></div><em class="c-{r.CERTAINTY.lower()}">{escape(r.CERTAINTY)} '
                 f'certainty</em></div>' for i, r in enumerate(acts.itertuples(), 1)) + "</div>")
+    if el is not None:
+        nav.guarded("Scenario simulator", lambda: _scenario(c, el))
     with nav.card("studio_nothing"):
         nav.section("If nothing changes", f"{c.brand} weekly value sales, next 13 weeks (Holt-Winters projection of the "
                     "measured pattern; it does not know about plans or promotions)")
@@ -278,6 +313,28 @@ def manager(c: Ctx) -> None:
                + (f"Top action: {best.ACTION}, about {fmt.money(best.VALUE_PER_WEEK, c.cur)} a week ({best.CERTAINTY.lower()} "
                   "certainty)." if best is not None else ""))
     _actions_row(c, "mgr", summary, f"What should we do first about {c.brand}, and what is it worth?")
+
+
+def _scenario(c: Ctx, el: dict) -> None:
+    """Move price and distribution; competitors held; a Monte Carlo range from the brand's own elasticities."""
+    with nav.card("studio_scenario"):
+        nav.section("Try a scenario", "Move shelf price and distribution; competitors held. 4,000 simulations draw the "
+                    "brand's elasticities from their uncertainty, so the answer is a range, not a point.")
+        a, b = nav.stack("sc_ctl").columns(2)
+        price = a.slider("Shelf price change, %", -20, 20, 0, 1, key="sc_price")
+        dist = b.slider("Distribution change, ACV points", -20, 20, 0, 1, key="sc_dist")
+        sim = an.simulate(_panel(c.category, c.masked), c.brand, el, float(price), float(dist))
+        v, sh = sim["value_change"], sim["share_change"]
+        _tiles([("Weekly value change, median", fmt.money(v[1], c.cur),
+                 f"80% range {fmt.money(v[0], c.cur)} to {fmt.money(v[2], c.cur)}", _tone(v[1])),
+                ("Value share change, median", fmt.pts(sh[1]), f"80% range {fmt.pts(sh[0])} to {fmt.pts(sh[2])}", _tone(sh[1])),
+                ("Chance sales rise", f"{100 * sim['p_gain']:.0f}%", "of the simulations", ""),
+                ("Distribution", f"{sim['acv_now']:.0f}% → {sim['acv_new']:.0f}%", f"ACV · price {price:+d}%", "")])
+        if price or dist:
+            _plot(charts.pl_hist(sim["draws"].VALUE_CHANGE, f"Weekly value change ({c.cur})" if c.cur else "Weekly value change",
+                                 {"P10": v[0], "Median": v[1], "P90": v[2]}), "sc_hist")
+        else:
+            st.caption("Move a slider to simulate.")
 
 
 # ---- Analytics Manager --------------------------------------------------------------------------------------------
@@ -316,7 +373,13 @@ def analytics_manager(c: Ctx) -> None:
         nav.section("Priority list", "Retailers ranked by their share of the loss, each with the lever that moved most "
                     "and the play that fits it")
         z = dm.set_index("RETAILER")
-        scaled = z / z.abs().max().replace(0, np.nan)
+        # A lever "moved" when its change is material: 2 ACV points, 3% price index, 5% units per store (display
+        # heuristics for ranking plays, not pipeline gates). Share is the outcome, so it is never the lever.
+        material = dict(MATERIAL)
+        if data.cfg("EW_PRICE_RISE") is not None:                 # the early-warning price threshold (rule 4)
+            material["Price index"] = float(data.cfg("EW_PRICE_RISE"))
+        scaled = z[list(material)].abs() / pd.Series(material)
+        scaled = scaled.where(scaled >= 1)
         rows = []
         for r in pr[pr.CHANGE < 0].itertuples():
             row = scaled.loc[r.ITEM].abs().dropna() if r.ITEM in scaled.index else pd.Series(dtype=float)
@@ -330,6 +393,23 @@ def analytics_manager(c: Ctx) -> None:
             st.caption("No retailer lost value sales in this window.")
         else:
             st.dataframe(nav.striped(plan), hide_index=True, width="stretch", row_height=36)
+    left2, right2 = nav.stack("studio_am2").columns(2)
+    with left2, nav.card("studio_fair"):
+        nav.section("Fair share", f"Value share against share of distribution points, last {weeks} weeks, all retailers. "
+                    "Above the dotted line a brand sells more than its shelf presence; teal above 100 on the index.")
+        rep = _shown(data.share_report(c.category, int(weeks), "previous", None))
+        if rep.empty:
+            st.caption("No sales in this period.")
+        else:
+            _plot(charts.pl_fair_share(rep, c.brand), "studio_fair_chart")
+    with right2, nav.card("studio_ladder"):
+        nav.section("Price ladder", "Price per unit by pack size, last 4 weeks, all retailers. Hover for each pack's "
+                    "index against the category's average price for that pack.")
+        lad = _ladder(c.category, c.masked)
+        if lad.empty:
+            st.caption("No pack-level prices for this category.")
+        else:
+            _plot(charts.pl_ladder(lad, c.brand), "studio_ladder_chart")
     summary = ("Priorities for " + c.brand + ": " + "; ".join(f"{r['Retailer']} ({r['Share of the loss']} of loss, "
                f"{r['Lever that moved most'].split(',')[0].lower()})" for r in rows[:3]) + ".") if rows else f"No retailer loss for {c.brand}."
     _actions_row(c, "am", summary, f"Which retailers should we prioritise for {c.brand}, and why?")
@@ -337,7 +417,82 @@ def analytics_manager(c: Ctx) -> None:
 
 # ---- Data Analyst: the workbench ----------------------------------------------------------------------------------
 
+CHART_WORDS = [("heat", "Heatmap"), ("box", "Box"), ("scatter", "Scatter"), ("area", "Area"), ("bar", "Bar"),
+               ("column", "Bar"), ("line", "Line"), ("trend", "Line")]
+MEASURE_WORDS = [("price index", "PRICE_INDEX"), ("value share", "VALUE_SHARE_PCT"), ("share", "VALUE_SHARE_PCT"),
+                 ("price", "PRICE_PER_UNIT"), ("unit", "UNIT_SALES"), ("volume", "VOLUME_SALES"),
+                 ("acv", "ACV_DIST_PCT"), ("distribution", "ACV_DIST_PCT"), ("store", "STORES_SELLING"),
+                 ("sku", "SKUS_SELLING"), ("sales", "VALUE_SALES"), ("value", "VALUE_SALES")]
+DIM_WORDS = [("retailer", "RETAILER"), ("region", "REGION"), ("manufacturer", "MANUFACTURER"), ("brand", "BRAND")]
+
+
+def _rule_spec(text: str, allowed: dict) -> dict:
+    """A workbench spec from a plain-English request by keywords (used when no LLM is available, and to fill gaps)."""
+    import re as _re
+    q = text.lower()
+    y = next((m for w, m in MEASURE_WORDS if w in q), "VALUE_SHARE_PCT")
+    by = next((d for w, d in DIM_WORDS if f"by {w}" in q or f"per {w}" in q or f"across {w}" in q), None)
+    over_time = any(w in q for w in ("over time", "trend", "weekly", "week by week", "by week", "line"))
+    x = "WEEK_END_DATE" if over_time or by is None else by
+    brands = [b for b in allowed["brands"] if b.lower() in q]
+    rets = [r for r in allowed["retailers"] if r.lower() in q]
+    colour = by if x == "WEEK_END_DATE" and by else ("BRAND" if x != "BRAND" and len(brands) != 1 else None)
+    kind = next((k for w, k in CHART_WORDS if w in q), "Line" if x == "WEEK_END_DATE" else "Bar")
+    m = _re.search(r"(\d+)\s*weeks?", q)
+    weeks = int(m.group(1)) if m else (52 if "year" in q else 13 if "quarter" in q else None)
+    agg = "Average" if y in ("VALUE_SHARE_PCT", "PRICE_INDEX", "ACV_DIST_PCT", "PRICE_PER_UNIT") else "Sum"
+    return {"kind": kind, "x": x, "y": y, "agg": agg, "colour": colour, "brands": brands, "retailers": rets, "weeks": weeks}
+
+
+def _ask_chart(c: Ctx) -> None:
+    """Build the workbench from the request: the LLM when the app offers one (local preview), the keyword rule
+    otherwise. Every value is checked against what the workbench allows before it is used."""
+    text = (st.session_state.get("wb_ask") or "").strip()
+    if not text:
+        return
+    p = _panel(c.category, c.masked)
+    allowed = {"kind": ["Line", "Bar", "Area", "Scatter", "Box", "Heatmap"],
+               "x": ["WEEK_END_DATE", "RETAILER", "REGION", "BRAND", "MANUFACTURER"],
+               "y": [m for m in MEASURE_LABELS if m in p.columns], "agg": list(AGGS),
+               "colour": [None, "BRAND", "MANUFACTURER", "RETAILER", "REGION", "BRAND_RETAILER"],
+               "brands": sorted(p.BRAND.unique()), "retailers": sorted(p.RETAILER.unique())}
+    rule = _rule_spec(text, allowed)
+    spec, how = rule, "keyword rule"
+    llm = getattr(data, "chart_spec", None)
+    if llm is not None:
+        try:
+            got = llm(text, allowed)
+            spec = {k: (got.get(k) if got.get(k) in allowed[k] else rule[k]) for k in ("kind", "x", "y", "agg", "colour")}
+            spec["brands"] = [b for b in (got.get("brands") or []) if b in allowed["brands"]] or rule["brands"]
+            spec["retailers"] = [r for r in (got.get("retailers") or []) if r in allowed["retailers"]] or rule["retailers"]
+            spec["weeks"] = got.get("weeks") if isinstance(got.get("weeks"), int) else rule["weeks"]
+            how = "AI, checked against the workbench"
+        except Exception:                                        # noqa: BLE001 - the rule still answers
+            spec, how = rule, "keyword rule (the AI was unavailable)"
+    ss = st.session_state
+    ss["wb_src"] = "Brands by retailer and week"
+    ss["wb_kind"], ss["wb_x"], ss["wb_y"], ss["wb_agg"] = spec["kind"], spec["x"], spec["y"], spec["agg"]
+    ss["wb_colour"] = spec["colour"] if spec["colour"] != spec["x"] else None
+    if len(spec["brands"]) > 1 and ss["wb_colour"] in ("RETAILER", "REGION") and spec["x"] == "WEEK_END_DATE":
+        ss["wb_colour"] = "BRAND_RETAILER"        # several brands split by retailer: one line each, never an average
+    if spec["kind"] == "Heatmap" and not ss["wb_colour"]:
+        ss["wb_colour"] = "BRAND" if spec["x"] != "BRAND" else "RETAILER"
+    ss["wb_brands"] = spec["brands"] or [c.brand] + [b for b in allowed["brands"] if b != c.brand][:3]
+    ss["wb_rets"] = spec["retailers"]
+    weeks = sorted(pd.to_datetime(p.WEEK_END_DATE).dt.date.unique())
+    n = max(2, min(int(spec["weeks"] or 52), len(weeks)))
+    ss["wb_weeks"] = (weeks[-n], weeks[-1])
+    ss["wb_ask_note"] = (f"Built by the {how}: {MEASURE_LABELS[spec['y']]} by {DIM_LABELS.get(spec['x'], spec['x']).lower()}"
+                         f", {spec['kind'].lower()} chart, last {n} weeks.")
+
+
 def analyst(c: Ctx) -> None:
+    with st.container(key="sr_wb_ask", horizontal=True, vertical_alignment="bottom", gap="small"):
+        st.text_input("Ask this chart", key="wb_ask", placeholder=f"e.g. {c.brand} value share by retailer over time, "
+                      "last 12 weeks")
+        st.button("Build chart", key="wb_ask_go", icon=":material/auto_awesome:", on_click=_ask_chart, args=(c,))
+    if st.session_state.get("wb_ask_note"):
+        st.caption(st.session_state["wb_ask_note"])
     src = st.radio("Data", ["Brands by retailer and week", f"{c.brand} SKUs by retailer and week"], horizontal=True,
                    key="wb_src", label_visibility="collapsed")
     sku = src != "Brands by retailer and week"
@@ -346,41 +501,61 @@ def analyst(c: Ctx) -> None:
         st.info("No rows for this selection.", icon=":material/info:")
         return
     df = df.assign(WEEK_END_DATE=pd.to_datetime(df.WEEK_END_DATE))
+    if not sku:
+        df = df.assign(BRAND_RETAILER=df.BRAND + " · " + df.RETAILER)
     dims = [d for d in DIM_LABELS if d in df.columns]
     measures = [m for m in MEASURE_LABELS if m in df.columns]
     with nav.card("wb_controls"):
         nav.section("Workbench", "Build any view. Drag to zoom, box or lasso to select, draw with the pen tools in the "
                     "chart toolbar (top right), double-click to reset.")
+        # Defaults live in session state only (no index/default/value arguments), so "Ask this chart" can set them;
+        # a stored value that the current data source does not offer falls back to the default.
+        ss = st.session_state
+
+        def keep(key: str, options: list, preferred):
+            if ss.get(key) not in options:
+                ss[key] = preferred if preferred in options else options[0]
+        kinds = ["Line", "Bar", "Area", "Scatter", "Box", "Heatmap"]
+        keep("wb_kind", kinds, "Line")
         c1, c2, c3, c4, c5 = nav.stack("wb_ctl").columns([1.2, 1.4, 1.6, 1, 1.4], vertical_alignment="bottom")
-        kind = c1.selectbox("Chart", ["Line", "Bar", "Area", "Scatter", "Box", "Heatmap"], key="wb_kind")
+        kind = c1.selectbox("Chart", kinds, key="wb_kind")
         x_opts = dims + (measures if kind == "Scatter" else [])
+        keep("wb_x", x_opts, "WEEK_END_DATE")
         x = c2.selectbox("X axis", x_opts, key="wb_x", format_func=lambda v: DIM_LABELS.get(v, MEASURE_LABELS.get(v, v)))
-        y = c3.selectbox("Measure", measures, key="wb_y", format_func=MEASURE_LABELS.get,
-                         index=measures.index("VALUE_SHARE_PCT") if "VALUE_SHARE_PCT" in measures else 0)
-        agg = c4.selectbox("Aggregate", list(AGGS), key="wb_agg",
-                           index=1 if y in ("VALUE_SHARE_PCT", "PRICE_INDEX", "ACV_DIST_PCT", "PRICE_PER_UNIT") else 0)
+        keep("wb_y", measures, "VALUE_SHARE_PCT")
+        y = c3.selectbox("Measure", measures, key="wb_y", format_func=MEASURE_LABELS.get)
+        keep("wb_agg", list(AGGS), "Average" if y in ("VALUE_SHARE_PCT", "PRICE_INDEX", "ACV_DIST_PCT", "PRICE_PER_UNIT")
+             else "Sum")
+        agg = c4.selectbox("Aggregate", list(AGGS), key="wb_agg")
         colour_opts = [None] + [d for d in dims if d != x and d != "WEEK_END_DATE"]
+        if "wb_colour" not in ss or ss["wb_colour"] not in colour_opts:
+            ss["wb_colour"] = ("ITEM_DESC" if sku else "BRAND") if ("ITEM_DESC" if sku else "BRAND") in colour_opts else None
         colour = c5.selectbox("Colour by", colour_opts, key="wb_colour",
-                              index=colour_opts.index("ITEM_DESC" if sku else "BRAND") if ("ITEM_DESC" if sku else "BRAND") in colour_opts else 0,
                               format_func=lambda v: "None" if v is None else DIM_LABELS[v])
         f1, f2, f3 = nav.stack("wb_flt").columns([2, 2, 3], vertical_alignment="bottom")
         if not sku:
             order = list(df.groupby("BRAND").VALUE_SALES.sum().sort_values(ascending=False).index)
-            default = [c.brand] + [b for b in order if b != c.brand][:3]
-            brands = f1.multiselect("Brands", order, default=[b for b in default if b in order], key="wb_brands")
+            if "wb_brands" not in ss:
+                ss["wb_brands"] = [b for b in [c.brand] + [b for b in order if b != c.brand][:3] if b in order]
+            ss["wb_brands"] = [b for b in ss["wb_brands"] if b in order]
+            brands = f1.multiselect("Brands", order, key="wb_brands")
             if brands:
                 df = df[df.BRAND.isin(brands)]
         else:
             skus = f1.multiselect("SKUs", sorted(df.ITEM_DESC.unique()), key="wb_skus", placeholder="All SKUs")
             if skus:
                 df = df[df.ITEM_DESC.isin(skus)]
+        ss["wb_rets"] = [r for r in ss.get("wb_rets", []) if r in set(df.RETAILER)]
         rets = f2.multiselect("Retailers", sorted(df.RETAILER.unique()), key="wb_rets", placeholder="All retailers")
         if rets:
             df = df[df.RETAILER.isin(rets)]
         weeks = sorted(df.WEEK_END_DATE.dt.date.unique())
         if len(weeks) > 1:
+            held = ss.get("wb_weeks")
+            if not held or held[0] < weeks[0] or held[1] > weeks[-1] or held[0] >= held[1]:
+                ss["wb_weeks"] = (weeks[max(0, len(weeks) - 52)], weeks[-1])
             lo, hi = f3.slider("Weeks", min_value=weeks[0], max_value=weeks[-1], step=timedelta(weeks=1),
-                               value=(weeks[max(0, len(weeks) - 52)], weeks[-1]), key="wb_weeks", format="DD MMM YY")
+                               key="wb_weeks", format="DD MMM YY")
             df = df[(df.WEEK_END_DATE.dt.date >= lo) & (df.WEEK_END_DATE.dt.date <= hi)]
     if df.empty:
         st.info("No rows match these filters.", icon=":material/info:")
@@ -646,6 +821,100 @@ def _m_cannibal(c: Ctx) -> None:
           "built in. The weekly run's share flow is the allocation of record.")
 
 
+# ---- Emerging shifts (a studio lens and a Radar card) -------------------------------------------------------------
+
+@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+def _emerging(category: str, masked: bool, threshold: float, min_z: float) -> pd.DataFrame:
+    return an.emerging_shifts(_panel(category, masked), threshold, min_z)
+
+
+def _emerging_frame(category: str, masked: bool) -> tuple[pd.DataFrame, float, float]:
+    """The scan with the run's own gates as thresholds: MIN_SHARE_PTS and MIN_Z from OPS.SETTINGS (rule 4)."""
+    thr, mz = data.cfg("MIN_SHARE_PTS"), data.cfg("MIN_Z")
+    if thr is None or mz is None:
+        raise an.AnalyticsError("The emerging-shift scan needs the MIN_SHARE_PTS and MIN_Z settings.")
+    return _emerging(category, masked, float(thr), float(mz)), float(thr), float(mz)
+
+
+def _emerging_table(em: pd.DataFrame) -> pd.DataFrame:
+    wk = lambda v: "–" if v is None or pd.isna(v) else pd.Timestamp(v).strftime("%d %b")   # noqa: E731
+    return pd.DataFrame({"Brand": em.BRAND, "Retailer": em.RETAILER,
+                         "Move": np.where(em.DIRECTION == "UP", "↑ gaining", "↓ losing"), "Status": em.STATUS,
+                         "Chippy flagged": em.ALARM_WEEK.map(wk), "4-week report": em.REPORT_WEEK.map(wk),
+                         "Weeks earlier": em.LEAD_WEEKS.map(lambda v: "–" if pd.isna(v) else f"{int(v)}"),
+                         "L4W vs YA, pts": em.L4W_VS_YA_PTS.map(fmt.pts), "Drift, sd": em.DRIFT_SD.round(1)})
+
+
+def emerging(c: Ctx) -> None:
+    try:
+        em, thr, mz = _emerging_frame(c.category, c.masked)
+    except an.AnalyticsError as e:
+        st.info(str(e), icon=":material/info:")
+        return
+    if em.empty:
+        st.info("No brand at any retailer is moving outside its normal range.", icon=":material/info:")
+        return
+    new = em[~em.IN_REPORTS]
+    early = em[em.STATUS == "Flagged early"]
+    _tiles([("Emerging: not in reports yet", str(len(new)), "moving now; no 4-week report has flagged it", "neg" if len(new) else ""),
+            ("Flagged before the report", str(len(early)), "caught in a weekly run before the period report", ""),
+            ("Average lead", f"{early.LEAD_WEEKS.mean():.1f} weeks" if len(early) else "–", "for moves the report also caught", ""),
+            ("Series watched", f"{em.shape[0]} moving", "brand x retailer, scanned weekly", "")])
+    with nav.card("studio_em_table"):
+        nav.section("Moves building now", f"Same test as the reports (change at least {thr:g} pts and at least {mz:g} "
+                    "standard deviations from normal, last 4 weeks vs year ago), run every week instead of every 4 weeks, "
+                    "plus a drift detector for slow moves.")
+        st.dataframe(nav.striped(_emerging_table(em)), hide_index=True, width="stretch", row_height=34)
+    lead = em[~em.IN_REPORTS].dropna(subset=["LEAD_WEEKS"]).assign(ITEM=lambda x: x.BRAND + " · " + x.RETAILER)
+    if len(lead):
+        with nav.card("studio_em_lead"):
+            nav.section("Weeks ahead of the 4-week report", "For moves not yet in a report: weeks since Chippy flagged them")
+            _plot(charts.pl_bars_h(lead.head(12)[["ITEM", "LEAD_WEEKS"]], "ITEM", "LEAD_WEEKS", "Weeks", fmt=".0f"),
+                  "studio_em_lead_chart")
+    _card("Emerging shifts", "For each brand at each retailer: weekly value share minus the same week a year ago (no "
+          "season). The 4-week report view tests the last-4-weeks change once per 4-week period; Chippy runs the same "
+          "test every week and a two-sided CUSUM (slack 0.5, alarm at 5 standard deviations) for slow drift.",
+          f"Thresholds from the settings: MIN_SHARE_PTS {thr:g}, MIN_Z {mz:g}.",
+          "Lead time comes from the weekly cadence and the drift detector, not from a different test. Drift alarms on "
+          "small brands can be noise; treat them as a watch list, and the weekly run's gates as the shifts of record.")
+    _actions_row(c, "em", f"Emerging shifts: {len(new)} moving and not in reports yet; " + "; ".join(
+        f"{r.BRAND} at {r.RETAILER} {'up' if r.DIRECTION == 'UP' else 'down'}" for r in new.head(3).itertuples()) + ".",
+        "Which emerging shifts should we look at before the next 4-week report?")
+
+
+def emerging_radar(run) -> None:
+    """The Radar card: what is building before the reports show it, top five, with a link into Insight Studio."""
+    masked = data.cfg("DISPLAY_ALIAS") is True
+    with nav.card("emerging_radar"):
+        st.html('<div class="sr-radar-section"><h3><span class="sr-ico" aria-hidden="true">radar</span>Emerging Shifts'
+                '</h3><p>Moves building now, found by the weekly scan before a 4-week report shows them</p></div>')
+        if not st.session_state.get("sr_emerging_on"):          # on demand: the scan reads the full weekly panel
+            if st.button("Scan every brand at every retailer", key="sr_btn_emerging_scan", icon=":material/radar:"):
+                st.session_state["sr_emerging_on"] = True
+                st.rerun()
+            return
+        try:
+            em, thr, mz = _emerging_frame(str(data.cfg("SCOPE_CATEGORY")), masked)
+        except an.AnalyticsError as e:
+            st.caption(str(e))
+            return
+        if em.empty:
+            st.caption("Nothing is moving outside its normal range at any retailer.")
+            return
+        new = em[~em.IN_REPORTS]
+        early = em[em.STATUS == "Flagged early"]
+        st.html(f'<div class="sr-em-strip"><b>{len(new)}</b><span>not in any report yet</span><b>{len(early)}</b>'
+                f'<span>caught before the period report</span><b>{early.LEAD_WEEKS.mean():.1f}</b><span>weeks average lead'
+                f'</span></div>' if len(early) else f'<div class="sr-em-strip"><b>{len(new)}</b><span>not in any report yet'
+                '</span></div>')
+        st.dataframe(nav.striped(_emerging_table(em.head(5))), hide_index=True, width="stretch", row_height=34)
+        if st.button("Open Emerging Shifts in Insight Studio", key="sr_btn_emerging", icon=":material/insights:",
+                     type="tertiary"):
+            st.session_state["shift_view"] = "Studio"
+            st.session_state["studio_lens"] = "early"
+            st.switch_page("pages/1_Shift_detail.py")
+
+
 # ---- entry point ----------------------------------------------------------------------------------------------------
 
 def render(c: Ctx) -> None:
@@ -658,4 +927,4 @@ def render(c: Ctx) -> None:
             f'<b>{escape(LENSES[lens][0])}</b><span>{escape(LENSES[lens][1])}</span>'
             '<em>Exploratory · not in the brief</em></div>')
     {"director": director, "manager": manager, "amanager": analytics_manager, "analyst": analyst,
-     "scientist": scientist}[lens](c)
+     "scientist": scientist, "early": emerging}[lens](c)

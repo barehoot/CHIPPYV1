@@ -26,7 +26,7 @@ TS = pd.Timestamp("2026-11-09 06:00:00+00:00")
 
 SETTINGS = {"AS_OF_WEEK_END": "2026-11-07", "SCOPE_CATEGORY": "Biscuits", "SCOPE_PARENT_MARKET": "M0",
             "FOCUS_MANUFACTURER": "Acme Foods", "CURRENCY": "INR", "DISPLAY_ALIAS": False, "TOP_N": 5,
-            "MIN_SHARE_PTS": 0.3, "NOTIFY_EMAILS": ["a@x.com"], "NOTIFY_ALLOWED": ["a@x.com"]}
+            "MIN_SHARE_PTS": 0.3, "MIN_Z": 2.0, "EW_PRICE_RISE": 0.03, "NOTIFY_EMAILS": ["a@x.com"], "NOTIFY_ALLOWED": ["a@x.com"]}
 
 
 PANEL_BRANDS = {  # brand -> (manufacturer, base price, price elasticity, base units) — invented sample brands
@@ -91,6 +91,31 @@ def synthetic_panels() -> tuple[pd.DataFrame, pd.DataFrame]:
     k["UNITS_PER_STORE"] = k.UNIT_SALES / k.STORES_SELLING
     _PANELS = (b, k.sort_values(["WEEK_END_DATE", "RETAILER", "ITEM_DESC"]).reset_index(drop=True))
     return _PANELS
+
+
+def synthetic_ladder() -> pd.DataFrame:
+    """Price per unit by brand and pack for the last 4 weeks of the synthetic panel: each brand's sales split over its
+    packs, bigger packs dearer per unit but cheaper per gram (the same shape as data.price_ladder)."""
+    b = synthetic_panels()[0]
+    last = b[b.WEEK_END_DATE > b.WEEK_END_DATE.max() - pd.Timedelta(weeks=4)].groupby(["BRAND", "MANUFACTURER"])[
+        ["VALUE_SALES", "UNIT_SALES"]].sum()
+    rows = []
+    for (brand, mfr), r in last.iterrows():
+        packs = [("200g", 1.0, 0.6), ("400g", 1.75, 0.4)] if brand == "Store Brand" else \
+            [("100g", 0.55, 0.2), ("200g", 1.0, 0.3), ("300g", 1.4, 0.25), ("400g", 1.75, 0.25)]
+        base = r.VALUE_SALES / r.UNIT_SALES
+        for pack, mult, w in packs:
+            units = r.UNIT_SALES * w
+            rows.append({"BRAND": brand, "MANUFACTURER": mfr, "PACK_SIZE": pack, "UNIT_SALES": units,
+                         "VALUE_SALES": units * base * mult, "PRICE_PER_UNIT": base * mult})
+    return pd.DataFrame(rows)
+
+
+def _share_report_ref(weeks, compare, retailer):
+    """data.share_report for the fake: the pandas reference (analytics.share_report) on the synthetic panel, which the
+    SQL mirrors."""
+    from sr_ui import analytics
+    return analytics.share_report(synthetic_panels()[0], int(weeks), compare, retailer)
 
 
 def build_fake():
@@ -177,6 +202,8 @@ def build_fake():
         "trend": lambda *a: trend, "brand_sales_week": lambda *a: sales, "region_summary": lambda *a, **k: regions,
         "sku_retailer": lambda *a, **k: skus, "brand_share_weeks": lambda *a, **k: shares,
         "brand_panel": lambda category, weeks=104: synthetic_panels()[0],
+        "price_ladder": lambda category, weeks=4: synthetic_ladder(),
+        "share_report": lambda category, weeks=4, compare="previous", retailer=None: _share_report_ref(weeks, compare, retailer),
         "portfolio": lambda rid: (lambda d: {"N_SHIFTS": len(d), "VALUE_LOSS": d.VALUE_AT_STAKE.clip(upper=0).sum(),
                                              "VALUE_GAIN": d.VALUE_AT_STAKE.clip(lower=0).sum(),
                                              "N_LOSS": int((d.VALUE_AT_STAKE < 0).sum()), "N_GAIN": int((d.VALUE_AT_STAKE > 0).sum()),
@@ -646,6 +673,23 @@ def test_studio_masks_names_when_display_alias_is_on(fake_data, monkeypatch):
         at.run()
         shown = " ".join(df.value.to_csv() for df in at.dataframe) + " ".join(str(e.proto) for e in at.get("plotly_chart"))
         assert not [n for n in real if n in shown], model
+    for lens in ["early", "amanager"]:                                      # round 2 views
+        at.session_state["studio_lens"] = lens
+        at.run()
+        _clean(at)
+        shown = " ".join(df.value.to_csv() for df in at.dataframe) + " ".join(str(e.proto) for e in at.get("plotly_chart"))
+        assert not [n for n in real if n in shown], lens
+    at.switch_page("pages/2_Brief.py")
+    for view in ["intel", "report"]:
+        at.session_state["brief_view"] = view
+        at.run()
+        _clean(at)
+        shown = _texts(at) + " ".join(df.value.to_csv() for df in at.dataframe)
+        assert not [n for n in real if n in shown], view
+    radar = _run("streamlit_app.py")
+    radar.button(key="sr_btn_emerging_scan").click().run()
+    shown = _texts(radar) + " ".join(df.value.to_csv() for df in radar.dataframe)
+    assert not [n for n in real if n in shown] and "Brand A" in shown
 
 
 def test_floating_panel_question_goes_to_the_chosen_agent(fake_data):
@@ -655,3 +699,73 @@ def test_floating_panel_question_goes_to_the_chosen_agent(fake_data):
     at.run()
     next(b for b in at.button if (b.key or "").startswith("sr_fab_sugg_")).click().run()
     assert ("ask", "SR_DB.SEM.RADAR_ANALYST_AGENT") in fake_data.calls and not at.exception
+
+
+# ---- SR-065 round 2: Intelligence brief, share report, emerging shifts, scenario, Ask this chart ------------------
+
+def test_brief_views_render(fake_data):
+    at = _run("streamlit_app.py", "pages/2_Brief.py")
+    for view, expect in [("intel", "Executive summary"), ("report", "Competitive share report"), ("record", "Brief")]:
+        at.session_state["brief_view"] = view
+        at.run()
+        _clean(at)
+        assert expect in _texts(at), view
+    at.session_state["brief_view"] = "intel"
+    at.run()
+    assert "Numbers are locked" in _texts(at)                               # the methods and sources table
+
+
+def test_intelligence_brief_template_is_locked(fake_data):
+    from sr_ui import intel
+    run = fake_data.current_run()
+    pk = intel.build_pack(run.run_id, "Biscuits", False, "INR", fake_data.market_names())
+    secs, gen = intel.narrative(pk)
+    assert gen.startswith("Template") and set(secs) == set(intel.OUTLINE)
+    assert all(not intel.problems(t, pk) for t in secs.values()), {s: intel.problems(t, pk) for s, t in secs.items()}
+
+
+def test_intelligence_brief_llm_sections_are_checked(fake_data, monkeypatch):
+    from sr_ui import intel
+    run = fake_data.current_run()
+    pk = intel.build_pack(run.run_id, "Biscuits", False, "INR", fake_data.market_names())
+    good = next(iter(pk.facts))
+    monkeypatch.setattr(fake_data, "narrate", lambda facts, outline, draft=None, **k: {
+        "Executive summary": f"Shifts in play: [{good}].", "What moved": "Crunchy lost 0.84 pts."}, raising=False)
+    secs, gen = intel.narrative(pk)
+    assert secs["Executive summary"] == f"Shifts in play: [{good}]."             # a clean LLM section is kept
+    assert secs["What moved"] != "Crunchy lost 0.84 pts."                     # a typed number falls back
+    assert "AI narrative" in gen and "from the template" in gen
+
+
+def test_radar_shows_emerging_shifts(fake_data):
+    at = _run("streamlit_app.py")
+    _clean(at)
+    assert "Emerging Shifts" in _texts(at) and "not in any report yet" not in _texts(at)    # on demand
+    at.button(key="sr_btn_emerging_scan").click().run()
+    _clean(at)
+    assert "not in any report yet" in _texts(at)
+
+
+def test_studio_emerging_lens_and_scenario(fake_data):
+    at = _studio()
+    at.session_state["studio_lens"] = "early"
+    at.run()
+    _clean(at)
+    assert "Moves building now" in _texts(at)
+    at.session_state["studio_lens"] = "manager"
+    at.session_state["sc_price"], at.session_state["sc_dist"] = -5, 8
+    at.run()
+    _clean(at)
+    assert "Chance sales rise" in _texts(at)
+
+
+def test_ask_this_chart_builds_the_workbench(fake_data):
+    at = _studio()
+    at.session_state["studio_lens"] = "analyst"
+    at.run()
+    at.text_input(key="wb_ask").set_value("Golden Bake unit sales by retailer as bars, last 12 weeks")
+    at.button(key="wb_ask_go").click().run()
+    _clean(at)
+    ss = at.session_state
+    assert (ss["wb_kind"], ss["wb_x"], ss["wb_y"], ss["wb_brands"]) == ("Bar", "RETAILER", "UNIT_SALES", ["Golden Bake"])
+    assert (ss["wb_weeks"][1] - ss["wb_weeks"][0]).days == 11 * 7
