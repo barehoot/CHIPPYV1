@@ -8,6 +8,6 @@ if [ ! -d .venv ]; then
   .venv/bin/python -m pip install --upgrade pip
   .venv/bin/python -m pip install -r requirements-demo.txt
 fi
-echo "Starting CHIPPY on http://localhost:8501 and CHIPPY_ADMIN on http://localhost:8502 (Ctrl+C stops both)"
+echo "Starting CHIPPY on http://localhost:8501 and CHIPPY_ADMIN on http://localhost:8503 (Ctrl+C stops both)"
 .venv/bin/python -m streamlit run streamlit/demo_chippy.py --server.port 8501 &
-.venv/bin/python -m streamlit run streamlit/demo_chippy_admin.py --server.port 8502
+.venv/bin/python -m streamlit run streamlit/demo_chippy_admin.py --server.port 8503

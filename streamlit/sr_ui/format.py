@@ -51,12 +51,15 @@ def signed_pct(ratio: float | None, d: int = 1) -> str:
     return DASH if _missing(ratio) else f"{100 * float(ratio):+.{d}f}%"
 
 
+HIGH_CONFIDENCE = 0.8      # 'High' from here; the Insight Studio risk matrix draws its "Act now" line at the same value
+
+
 def confidence(c: float | None) -> str:
     """>= 0.8 'High', >= 0.5 'Medium', else 'Low', with the value."""
     if _missing(c):
         return DASH
     c = float(c)
-    return f"{'High' if c >= 0.8 else 'Medium' if c >= 0.5 else 'Low'} ({c:.2f})"
+    return f"{'High' if c >= HIGH_CONFIDENCE else 'Medium' if c >= 0.5 else 'Low'} ({c:.2f})"
 
 
 def name(real: str | None, kind: str = "BRAND") -> str:

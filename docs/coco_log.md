@@ -40,3 +40,8 @@
 | 2026-11-24T10:19:17+00:00 | SR-004 | claude-code | manual | 2 | 115 | - | no | SR-004: scope-choice queries, demo script and dry-run checklist |
 | 2026-11-24T10:19:17+00:00 | SR-063 | claude-code | manual | 2 | 74 | - | no | SR-063: solution brief draft |
 | 2026-11-24T10:19:17+00:00 | SR-064 | claude-code | manual | 4 | 177 | - | no | SR-064: README, ticket status in the HLD, run_all.sql |
+| 2026-11-26T06:55:20+00:00 | SR-065 | claude-code | stop | 0 | 0 | - | no | 9eea7772-9661-4c6d-957f-301c58e3c614 |
+| 2026-11-26T07:09:27+00:00 | SR-065 | claude-code | stop | 3 | 4 | - | no | 9eea7772-9661-4c6d-957f-301c58e3c614 |
+| 2026-11-26T07:59:36+00:00 | SR-065 | claude-code | stop | 26 | 2304 | test_ui_pages | no | 9eea7772-9661-4c6d-957f-301c58e3c614 |
+| 2026-11-26T08:10:57+00:00 | SR-065 | claude-code | stop | 27 | 1051 | test_ui_pages | no | 9eea7772-9661-4c6d-957f-301c58e3c614 |
+| 2026-11-26T08:13:14+00:00 | SR-065 | claude-code | stop | 27 | 1058 | test_ui_pages | no | 9eea7772-9661-4c6d-957f-301c58e3c614 |

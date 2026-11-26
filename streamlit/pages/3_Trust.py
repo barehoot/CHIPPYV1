@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import charts, data, format as fmt, nav
+nav.entry_guard("pages/3_Trust.py")   # a refresh or direct link still opens inside the app
 
 extra = nav.radar_header("Data & Trust", "Pipeline health, accuracy checks and run history")
 run = data.current_run()

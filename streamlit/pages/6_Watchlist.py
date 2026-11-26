@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import charts, data, format as fmt, nav, workspace
+nav.entry_guard("pages/6_Watchlist.py")   # a refresh or direct link still opens inside the app
 
 extra = nav.radar_header("Watchlist", "The shifts you follow, with this week's validated numbers")
 run = data.current_run()

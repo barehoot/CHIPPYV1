@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import charts, data, format as fmt, nav, workspace
+nav.entry_guard("pages/1_Shift_detail.py")   # a refresh or direct link still opens inside the app
 
 from pathlib import Path
 
@@ -182,6 +183,14 @@ def _empty(text: str) -> None:
 
 def _sign(v) -> str:
     return "" if v is None or pd.isna(v) else ("neg" if float(v) < 0 else "pos")
+
+
+def _best(v: float, noun: str) -> tuple[str, str, str]:
+    """(card label, icon, takeaway word) for the highest value: 'strongest' only when it actually grew, so a list where
+    every item fell says 'smallest decline' instead of calling a fall the strongest."""
+    if v is not None and not pd.isna(v) and float(v) < 0:
+        return f"Smallest {noun} decline", "south_east", "smallest decline"
+    return f"Strongest {noun}", "north_east", "strongest"
 
 
 def key_finding() -> None:
@@ -496,8 +505,11 @@ def forecast_view() -> None:
         c1, c2, c3 = nav.stack("fc_ctl").columns([2, 1.5, 3], vertical_alignment="bottom")
         measure = c1.selectbox("Measure", list(MEASURES), key="fc_measure")
         h = c2.segmented_control("Horizon, weeks", [4, 8, 13], default=8, key="fc_h") or 8
+        from sr_ui import forecast as _fc
         models = c3.pills("Models", ["ARIMA", "SARIMA", "Holt-Winters", "TCN"], selection_mode="multi",
-                          default=["ARIMA", "SARIMA", "Holt-Winters", "TCN"], key="fc_models") or []
+                          default=["ARIMA", "SARIMA", "Holt-Winters"] + (["TCN"] if _fc.tcn_available() else []),
+                          key="fc_models", help=None if _fc.tcn_available() else
+                          "TCN needs PyTorch, which is not installed here; pick it to see why.") or []
     if not models:
         _empty("Pick at least one model.")
         return
@@ -533,9 +545,12 @@ def forecast_view() -> None:
         st.markdown('<div class="sr-tiles">' + "".join(cards) + "</div>", unsafe_allow_html=True)
     with nav.card("fc_chart"):
         nav.section(f"Actual and projected {measure.lower().replace(' %', '')}", "Pick a model in the legend to focus it.")
+        fit = st.toggle("Fit the axis to the data", value=True, key="fc_fit",
+                        help="On: the value axis spans the data, so small movements show. Off: it starts at zero.")
         hist = pd.DataFrame({"WEEK_END_DATE": y.index, "VALUE": y.to_numpy()})
-        st.altair_chart(charts.forecast_chart(hist, results, title, f), width="stretch")
-        st.caption("Solid line: history. Dashed: forecasts. Shaded: 80% band. Click a legend entry to focus one model.")
+        st.altair_chart(charts.forecast_chart(hist, results, title, f, zero=not fit), width="stretch")
+        st.caption("Solid line: history. Dashed: forecasts. Shaded: 80% band. Click a legend entry to focus one model. "
+                   "Drag to pan, scroll to zoom, double-click to reset.")
     for name, msg in errors.items():
         st.warning(f"{name}: {msg}", icon=":material/warning:")
     with nav.stack("fc_lower"):
@@ -548,12 +563,14 @@ def forecast_view() -> None:
                 holdout = min(8, max(4, len(y) // 8))
                 st.caption(f"How well each model did: fitted without the last {holdout} weeks, then scored on them. "
                            "Lower is better.")
-                st.dataframe(nav.striped(bt.assign(BEST=["best" if b else "" for b in bt.BEST])), hide_index=True,
-                             row_height=36, column_config={
+                st.dataframe(nav.striped(bt.assign(BEST=["✓" if b else "" for b in bt.BEST])), hide_index=True,
+                             row_height=36, width="stretch", column_order=["MODEL", "MAE", "RMSE", "MAPE", "BEST", "NOTE"],
+                             column_config={
                                  "MODEL": "Model", "MAE": st.column_config.NumberColumn("MAE", format="%.3f"),
                                  "RMSE": st.column_config.NumberColumn("RMSE", format="%.3f"),
                                  "MAPE": st.column_config.NumberColumn("MAPE %", format="%.2f"),
-                                 "BEST": "Lowest MAE", "NOTE": "Note"})
+                                 "BEST": st.column_config.TextColumn("Best", width="small"),
+                                 "NOTE": st.column_config.TextColumn("Note", width="medium")})
         with right, nav.card("fc_notes"):
             st.subheader("Models and limitations")
             for r in results:
@@ -672,13 +689,14 @@ def map_view() -> None:
     tot, tot0 = r.VALUE_SALES.sum(), r.VALUE_SALES_BEFORE.sum()
     if len(ranked):
         lo, hi = ranked.iloc[0], ranked.iloc[-1]
-        _say(f"Largest share decline: {lo.RETAILER} ({lo.REGION}), {fmt.pts(lo.SHARE_CHG_PTS)}; strongest: {hi.RETAILER} "
+        best_k, best_i, best_w = _best(hi.SHARE_CHG_PTS, "region")
+        _say(f"Largest share decline: {lo.RETAILER} ({lo.REGION}), {fmt.pts(lo.SHARE_CHG_PTS)}; {best_w}: {hi.RETAILER} "
              f"({hi.REGION}), {fmt.pts(hi.SHARE_CHG_PTS)}. Last {weeks} weeks vs the {weeks} before.")
         _cards([("payments", "Brand sales, all regions", fmt.money(tot, cur), "", f"Last {weeks} weeks"),
                 ("percent", "Sales change", fmt.signed_pct(tot / tot0 - 1) if tot0 else "–",
                  _sign(tot / tot0 - 1) if tot0 else "", f"vs the {weeks} weeks before"),
                 ("south_east", "Weakest region", fmt.pts(lo.SHARE_CHG_PTS), _sign(lo.SHARE_CHG_PTS), f"{lo.RETAILER} · {lo.REGION}"),
-                ("north_east", "Strongest region", fmt.pts(hi.SHARE_CHG_PTS), _sign(hi.SHARE_CHG_PTS), f"{hi.RETAILER} · {hi.REGION}")])
+                (best_i, best_k, fmt.pts(hi.SHARE_CHG_PTS), _sign(hi.SHARE_CHG_PTS), f"{hi.RETAILER} · {hi.REGION}")])
     with nav.stack("map"):
         left, right = st.columns([1, 1])
         with left, nav.card("map_tiles"):
@@ -735,12 +753,13 @@ def sku_view() -> None:
     ranked = agg.dropna(subset=["SALES_CHG_PCT"]).sort_values("SALES_CHG_PCT")
     if len(ranked):
         lo, hi = ranked.iloc[0], ranked.iloc[-1]
-        _say(f"Largest SKU decline: {lo.ITEM_DESC}, {lo.SALES_CHG_PCT:+.1f}% in value sales; strongest: {hi.ITEM_DESC}, "
+        best_k, best_i, best_w = _best(hi.SALES_CHG_PCT, "SKU")
+        _say(f"Largest SKU decline: {lo.ITEM_DESC}, {lo.SALES_CHG_PCT:+.1f}% in value sales; {best_w}: {hi.ITEM_DESC}, "
              f"{hi.SALES_CHG_PCT:+.1f}%. Last 4 weeks vs the 4 before" + (f", regions {', '.join(picked)}." if picked else "."))
         acv = k.ACV_DIST_PCT.dropna()
         _cards([("inventory_2", "SKUs selling", f"{k.ITEM_DESC.nunique():,}", "", f"across {k.RETAILER.nunique():,} retailers"),
                 ("south_east", "Weakest SKU", f"{lo.SALES_CHG_PCT:+.1f}%", _sign(lo.SALES_CHG_PCT), str(lo.ITEM_DESC)),
-                ("north_east", "Strongest SKU", f"{hi.SALES_CHG_PCT:+.1f}%", _sign(hi.SALES_CHG_PCT), str(hi.ITEM_DESC)),
+                (best_i, best_k, f"{hi.SALES_CHG_PCT:+.1f}%", _sign(hi.SALES_CHG_PCT), str(hi.ITEM_DESC)),
                 ("store", "ACV distribution", f"{acv.min():.0f}–{acv.max():.0f}%" if len(acv) else "–", "", "lowest to highest")])
     with nav.card("sku_heat"):
         nav.section("SKUs by retailer", "Each cell is one SKU at one retailer. Hover a cell for its numbers.")
@@ -772,14 +791,21 @@ def sku_view() -> None:
                            "ACV distribution %": st.column_config.NumberColumn(format="%.1f")})
 
 
+def studio_view() -> None:
+    """Insight Studio: role lenses, the workbench and the model lab (sr_ui/studio.py). Exploratory, not in the brief."""
+    from sr_ui import studio
+    studio.render(studio.Ctx(s, sid, run, markets, cur, takeaway, options, label=_short))
+
+
 # The stored values (and so session state, deep links and tests) are unchanged; only the shown names changed.
 VIEWS = {"Overview": ("Investigation", ":material/search_insights:", investigation),
          "Forecast": ("Future Trends", ":material/trending_up:", forecast_view),
          "Statistics": ("Statistical Evidence", ":material/functions:", stats_view),
          "Map and stores": ("Market Footprint", ":material/map:", map_view),
-         "SKUs and heatmaps": ("Product Intelligence", ":material/grid_view:", sku_view)}
+         "SKUs and heatmaps": ("Product Intelligence", ":material/grid_view:", sku_view),
+         "Studio": ("Insight Studio", ":material/insights:", studio_view)}
 URL_VIEW = {"investigation": "Overview", "trends": "Forecast", "statistics": "Statistics", "footprint": "Map and stores",
-            "product": "SKUs and heatmaps"}
+            "product": "SKUs and heatmaps", "studio": "Studio"}
 _asked = URL_VIEW.get(str(st.query_params.get("view", "")))
 if _asked and not st.session_state.get("_sr_view_from_url"):    # a link or refresh reopens the same tab, once
     st.session_state.shift_view = _asked

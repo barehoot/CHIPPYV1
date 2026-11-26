@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import altair as alt
+import numpy as np
 import pandas as pd
 
 # Deep Teal & Mist palette (mirrored in nav.TOKENS and .streamlit/config.toml). No other colours.
@@ -210,7 +211,8 @@ def trend_lines(trend_df: pd.DataFrame, now: tuple[date, date], base: tuple[date
         x=x, opacity=alt.condition(hover, alt.value(0.6), alt.value(0)),
         tooltip=[alt.Tooltip("WEEK_END_DATE:T", title="Week ending"), alt.Tooltip("series:N"),
                  alt.Tooltip("pct:Q", title="%", format=".2f")]).add_params(hover)
-    return _theme((shade + tags + lines + labels + rule).properties(height=260, width="container"))
+    zoom = alt.selection_interval(bind="scales", encodings=["x"])      # drag to pan, scroll to zoom the weeks
+    return _theme((shade + tags + lines.add_params(zoom) + labels + rule).properties(height=260, width="container"))
 
 
 def step_timeline(steps_df: pd.DataFrame) -> alt.Chart:
@@ -226,9 +228,11 @@ def step_timeline(steps_df: pd.DataFrame) -> alt.Chart:
 
 # ---- Shift analysis tabs ---------------------------------------------------------------------------------------------
 
-def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str, fmt: str = ",.2f") -> alt.LayerChart:
+def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str, fmt: str = ",.2f",
+                   zero: bool = True) -> alt.LayerChart:
     """History (WEEK_END_DATE, VALUE) as a solid plum line and each model's forecast as a dashed line with its 80% band.
-    Click a legend entry to show one model; hover for a crosshair with the values for that week."""
+    Click a legend entry to show one model; hover for a crosshair with the values for that week; drag to pan and scroll
+    to zoom the weeks (double-click resets). zero=False fits the value axis to the data (a line chart, not bars)."""
     hist = history.assign(MODEL="History")[["WEEK_END_DATE", "VALUE", "MODEL"]]
     fc = pd.concat([r["forecast"].assign(MODEL=r["model"]) for r in results], ignore_index=True) if results else \
         pd.DataFrame(columns=["WEEK_END_DATE", "MEAN", "LO80", "HI80", "LO95", "HI95", "MODEL"])
@@ -245,12 +249,13 @@ def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str,
     x = alt.X("WEEK_END_DATE:T", title=None)
     shown = alt.condition(pick, alt.value(1), alt.value(0.12))
     band = alt.Chart(fc).mark_area(opacity=0.45, color=PALE).encode(
-        x=x, y=alt.Y("LO80:Q", title=value_title), y2="HI80:Q",
+        x=x, y=alt.Y("LO80:Q", title=value_title, scale=alt.Scale(zero=zero)), y2="HI80:Q",
         tooltip=[alt.Tooltip("MODEL:N", title="Model"), alt.Tooltip("WEEK_END_DATE:T", title="Week ending"),
                  alt.Tooltip("LO80:Q", title="80% low", format=fmt), alt.Tooltip("HI80:Q", title="80% high", format=fmt),
                  alt.Tooltip("LO95:Q", title="95% low", format=fmt), alt.Tooltip("HI95:Q", title="95% high", format=fmt)]
     ).transform_filter(pick)
-    h_line = alt.Chart(hist).mark_line(strokeWidth=2.2).encode(x=x, y=alt.Y("VALUE:Q", title=value_title), color=color,
+    h_line = alt.Chart(hist).mark_line(strokeWidth=2.2).encode(x=x, y=alt.Y("VALUE:Q", title=value_title,
+                                                                             scale=alt.Scale(zero=zero)), color=color,
                                                                opacity=shown)
     f_line = alt.Chart(lines_df).mark_line(strokeWidth=2).encode(x=x, y="MEAN:Q", color=color, strokeDash=dash,
                                                                  opacity=shown)
@@ -263,7 +268,9 @@ def forecast_chart(history: pd.DataFrame, results: list[dict], value_title: str,
                  alt.Tooltip("Y:Q", title=value_title, format=fmt)]).add_params(hover)
     rule = alt.Chart(all_pts).mark_rule(color=SLATE, strokeDash=[2, 2], opacity=0.6).encode(x=x).transform_filter(hover)
     cut = alt.Chart(last).mark_rule(color=GOLD, strokeDash=[2, 2], strokeWidth=1.5).encode(x=x)
-    return _theme((band + h_line + f_line + cut + rule + pts).add_params(pick).properties(height=320, width="container"))
+    zoom = alt.selection_interval(bind="scales", encodings=["x"])
+    return _theme((band + h_line.add_params(zoom) + f_line + cut + rule + pts).add_params(pick)
+                  .properties(height=320, width="container"))
 
 
 def decomposition_chart(decomp: pd.DataFrame) -> alt.VConcatChart:
@@ -271,8 +278,9 @@ def decomposition_chart(decomp: pd.DataFrame) -> alt.VConcatChart:
     x = alt.X("WEEK_END_DATE:T", title=None)
     base = alt.Chart(decomp).properties(height=110, width="container")
     obs = base.mark_line(color=SEA, strokeWidth=1.6).encode(
-        x=x, y=alt.Y("OBSERVED:Q", title="Observed"),
-        tooltip=[alt.Tooltip("WEEK_END_DATE:T"), alt.Tooltip("OBSERVED:Q", format=",.3f")])
+        x=x, y=alt.Y("OBSERVED:Q", title="Observed", scale=alt.Scale(zero=False)),
+        tooltip=[alt.Tooltip("WEEK_END_DATE:T"), alt.Tooltip("OBSERVED:Q", format=",.3f")]
+    ).add_params(alt.selection_interval(bind="scales", encodings=["x"]))   # zooms all three panels (shared x)
     trend = base.mark_line(color=TEAL, strokeWidth=2.2).encode(x=x, y="TREND:Q",
                                                                tooltip=[alt.Tooltip("TREND:Q", title="Trend", format=",.3f")])
     seas = base.mark_line(color=SLATE, strokeWidth=1.8).encode(x=x, y=alt.Y("SEASONAL:Q", title="Seasonal"),
@@ -367,3 +375,205 @@ def sku_bars(df: pd.DataFrame) -> alt.LayerChart:
            alt.Tooltip("VALUE_SALES:Q", title="Value sales, last 4 weeks", format=",.0f"),
            alt.Tooltip("VALUE_SALES_BEFORE:Q", title="4 weeks before", format=",.0f")]
     return _theme(_signed_bars(d, "ITEM_DESC", "SALES_CHG_PCT", color, tip, "-x", "Value sales change, %", stroke))
+
+
+# ---- Insight Studio: interactive Plotly charts (SR-065) ----------------------------------------------------------
+# Plotly adds what Altair cannot: box and lasso selection that the page reads back, and freehand drawing (lines,
+# open paths, rectangles, circles, eraser) on any chart from the toolbar. Same palette and type as the Altair charts.
+# Plotly is imported inside each builder, so pages that never open the studio never load it.
+
+CAT = [TEAL, GOLD, TERRA, SLATE, SEA, DEEP]                       # categorical series, in this order
+PLOTLY_CONFIG = {"displaylogo": False, "scrollZoom": True,
+                 "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "drawcircle", "eraseshape"],
+                 "toImageButtonOptions": {"format": "png", "scale": 2, "filename": "chippy_chart"}}
+
+
+def _pl(fig, height: int = 380, title: str | None = None, legend: bool = True):
+    """The house style for a Plotly figure: Inter, deep-teal ink, sea-glass grid, transparent background, drawn shapes in
+    gold, and the legend on top."""
+    fig.update_layout(height=height, margin=dict(l=8, r=8, t=40 if title else 16, b=8), title=dict(text=title or ""),
+                      font=dict(family=FONT, size=12, color=DEEP), paper_bgcolor="rgba(0,0,0,0)",
+                      plot_bgcolor="rgba(0,0,0,0)", hoverlabel=dict(font_family=FONT, bgcolor=WHITE),
+                      legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, title=None) if legend else None,
+                      showlegend=legend, dragmode="zoom",
+                      newshape=dict(line=dict(color=GOLD, width=3), fillcolor="rgba(198,168,121,0.18)"))
+    fig.update_xaxes(gridcolor=GRID, zerolinecolor=SEA, linecolor=SEA)
+    fig.update_yaxes(gridcolor=GRID, zerolinecolor=SEA, linecolor=SEA)
+    return fig
+
+
+def pl_explore(df: pd.DataFrame, kind: str, x: str, y: str, color: str | None, y_title: str, height: int = 420):
+    """Workbench chart from an aggregated frame (x, y, optional colour, ROW_ID). Every mark carries its ROW_ID in
+    customdata, so a box or lasso selection maps back to rows. kind: Line, Bar, Area, Scatter, Box, Heatmap."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    groups = [(None, df)] if not color else list(df.groupby(color, sort=False))
+    if kind == "Heatmap" and color:
+        z = df.pivot_table(index=color, columns=x, values=y, aggfunc="sum")
+        fig.add_trace(go.Heatmap(z=z.values, x=[str(c) for c in z.columns], y=[str(i) for i in z.index],
+                                 colorscale=[[0, MIST], [0.35, PALE], [0.6, SEA], [0.85, TEAL], [1, DEEP]],
+                                 colorbar=dict(title=y_title), hovertemplate=f"%{{y}} · %{{x}}<br>{y_title}: %{{z:,.2f}}<extra></extra>"))
+        return _pl(fig, height, legend=False)
+    for i, (name, g) in enumerate(groups):
+        c = CAT[i % len(CAT)]
+        label = str(name) if name is not None else y_title
+        common = dict(name=label, customdata=g["ROW_ID"], legendgroup=label)
+        hover = f"{label}<br>%{{x}}<br>{y_title}: %{{y:,.2f}}<extra></extra>"
+        if kind == "Bar":
+            fig.add_trace(go.Bar(x=g[x], y=g[y], marker_color=c, hovertemplate=hover, **common))
+        elif kind == "Box":
+            fig.add_trace(go.Box(x=g[x] if x != y else None, y=g[y], marker_color=c, boxpoints="outliers", **common))
+        elif kind == "Scatter":
+            fig.add_trace(go.Scatter(x=g[x], y=g[y], mode="markers", marker=dict(color=c, size=8, opacity=0.75,
+                                     line=dict(color=WHITE, width=0.5)), hovertemplate=hover, **common))
+        else:
+            fig.add_trace(go.Scatter(x=g[x], y=g[y], mode="lines+markers", marker=dict(size=4), line=dict(color=c, width=2,
+                                     dash=["solid", "dash", "dot", "dashdot"][(i // len(CAT)) % 4]),
+                                     fill="tozeroy" if kind == "Area" else None, hovertemplate=hover, **common))
+    if kind == "Bar":
+        fig.update_layout(barmode="group")
+    fig.update_yaxes(title=y_title)
+    return _pl(fig, height, legend=bool(color))
+
+
+def pl_causal(frame: pd.DataFrame, start, y_title: str):
+    """Actual (solid teal) against the counterfactual (dashed slate) with its prediction band; the shaded gap after
+    the change is the estimated effect; a gold line marks the change."""
+    import plotly.graph_objects as go
+    f = frame
+    post = f[f.POST]
+    fig = go.Figure([
+        go.Scatter(x=f.WEEK_END_DATE, y=f.HI, line=dict(width=0), showlegend=False, hoverinfo="skip"),
+        go.Scatter(x=f.WEEK_END_DATE, y=f.LO, fill="tonexty", fillcolor="rgba(166,193,189,0.30)", line=dict(width=0),
+                   name="90% band without the shift", hoverinfo="skip"),
+        go.Scatter(x=f.WEEK_END_DATE, y=f.PREDICTED, line=dict(color=SLATE, dash="dash", width=2), name="Without the shift (model)",
+                   hovertemplate="%{x|%d %b %Y}<br>Model: %{y:,.0f}<extra></extra>"),
+        go.Scatter(x=f.WEEK_END_DATE, y=f.ACTUAL, line=dict(color=TEAL, width=2.4), name="Actual",
+                   hovertemplate="%{x|%d %b %Y}<br>Actual: %{y:,.0f}<extra></extra>"),
+        go.Bar(x=post.WEEK_END_DATE, y=post.ACTUAL - post.PREDICTED, name="Weekly effect", yaxis="y2",
+               marker_color=[TERRA if v < 0 else TEAL for v in post.ACTUAL - post.PREDICTED], opacity=0.35,
+               hovertemplate="%{x|%d %b %Y}<br>Effect: %{y:+,.0f}<extra></extra>"),
+    ])
+    fig.add_vline(x=pd.Timestamp(start), line=dict(color=GOLD, dash="dot", width=2))
+    gap = (post.ACTUAL - post.PREDICTED)
+    m = float(max(gap.abs().max(), 1e-9)) if len(gap) else 1.0
+    # the effect bars keep to the lower third: zero sits a third of the way up, so they do not cover the lines
+    rng = [-1.1 * m, 2.2 * m] if (gap <= 0).all() else ([-2.2 * m, 1.1 * m] if (gap >= 0).all() else [-1.6 * m, 1.6 * m])
+    fig.update_layout(yaxis=dict(title=y_title), yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                      title="Weekly effect", zeroline=True, range=rng))
+    return _pl(fig, 400)
+
+
+def pl_change_point(series: pd.Series, cp: dict, y_title: str):
+    """The weekly series with the two fitted levels and the change week."""
+    import plotly.graph_objects as go
+    fig = go.Figure([go.Scatter(x=series.index, y=series.values, mode="lines+markers", marker=dict(size=4),
+                                line=dict(color=TEAL, width=2), name=y_title,
+                                hovertemplate="%{x|%d %b %Y}<br>%{y:,.2f}<extra></extra>")])
+    for (a, b, m), c in zip(cp["segments"], (SLATE, TERRA if cp["delta"] < 0 else TEAL)):
+        fig.add_trace(go.Scatter(x=[a, b], y=[m, m], mode="lines", line=dict(color=c, width=3, dash="dash"),
+                                 name=f"Level {m:,.2f}", hoverinfo="skip"))
+    fig.add_vline(x=cp["week"], line=dict(color=GOLD, dash="dot", width=2))
+    fig.update_yaxes(title=y_title)
+    return _pl(fig, 340)
+
+
+def pl_bars_h(df: pd.DataFrame, label: str, value: str, title: str, err: str | None = None, signed: bool = False,
+              fmt: str = ",.3f", height: int | None = None):
+    """Horizontal bars, largest on top, optional error bars; signed bars are teal for gains and terracotta for losses."""
+    import plotly.graph_objects as go
+    d = df.iloc[::-1]
+    colors = [TERRA if v < 0 else TEAL for v in d[value]] if signed else TEAL
+    fig = go.Figure(go.Bar(y=d[label], x=d[value], orientation="h", marker_color=colors,
+                           error_x=dict(type="data", array=d[err], color=SLATE) if err else None,
+                           text=None if err else [format(v, ("+" + fmt) if signed else fmt) for v in d[value]],
+                           textposition="outside", cliponaxis=False,
+                           hovertemplate=f"%{{y}}<br>{title}: %{{x:{fmt}}}<extra></extra>"))
+    fig.update_xaxes(title=title, zeroline=True)
+    return _pl(fig, height or max(180, 44 * len(d) + 60), legend=False)
+
+
+def pl_curves(curves: dict[str, pd.DataFrame], labels: dict[str, str], y_title: str):
+    """Partial dependence: one small panel per driver, the model's average prediction as that driver moves."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    names = list(curves)
+    fig = make_subplots(rows=1, cols=max(1, len(names)), subplot_titles=[labels.get(n, n) for n in names],
+                        shared_yaxes=True)
+    for i, n in enumerate(names, 1):
+        c = curves[n]
+        fig.add_trace(go.Scatter(x=c.X, y=c.Y, mode="lines", line=dict(color=CAT[i - 1], width=2.5), name=labels.get(n, n),
+                                 hovertemplate=f"{labels.get(n, n)}: %{{x:,.2f}}<br>{y_title}: %{{y:,.2f}}<extra></extra>"),
+                      row=1, col=i)
+    fig.update_yaxes(title=y_title, row=1, col=1)
+    return _pl(fig, 300, legend=False)
+
+
+def pl_segments(points: pd.DataFrame, x: str, y: str, x_title: str, y_title: str):
+    """Brand x retailer positions coloured by k-means segment, sized by sales; hover names the brand and retailer."""
+    import plotly.graph_objects as go
+    fig = go.Figure()
+    size = 10 + 30 * (points.SALES / points.SALES.max()).fillna(0) ** 0.5
+    for i, (seg, g) in enumerate(points.groupby("SEGMENT")):
+        fig.add_trace(go.Scatter(x=g[x], y=g[y], mode="markers", name=seg,
+                                 marker=dict(size=size[g.index], color=CAT[i % len(CAT)], opacity=0.8,
+                                             line=dict(color=WHITE, width=1)),
+                                 customdata=g[["BRAND", "RETAILER"]],
+                                 hovertemplate="%{customdata[0]} at %{customdata[1]}<br>" + f"{x_title}: %{{x:,.2f}}<br>"
+                                               f"{y_title}: %{{y:,.2f}}<extra>{seg}</extra>"))
+    fig.add_hline(y=0, line=dict(color=SEA, width=1))
+    fig.update_xaxes(title=x_title)
+    fig.update_yaxes(title=y_title)
+    return _pl(fig, 420)
+
+
+def pl_heat(matrix: pd.DataFrame, title: str, diverging: bool = True, fmt: str = "+.2f", height: int | None = None):
+    """A labelled heatmap; diverging matrices are centred on zero (terracotta below, teal above)."""
+    import plotly.graph_objects as go
+    z = matrix.values.astype(float)
+    m = float(np.nanmax(np.abs(z))) if z.size else 1.0
+    scale = [[0, TERRA], [0.5, MIST], [1, TEAL]] if diverging else [[0, MIST], [0.5, SEA], [1, DEEP]]
+    fig = go.Figure(go.Heatmap(z=z, x=[str(c) for c in matrix.columns], y=[str(i) for i in matrix.index],
+                               colorscale=scale, zmin=-m if diverging else None, zmax=m if diverging else None,
+                               text=[[format(v, fmt) if v == v else "" for v in row] for row in z],
+                               texttemplate="%{text}", colorbar=dict(title=title),
+                               hovertemplate="%{y} · %{x}<br>" + title + ": %{z:" + fmt + "}<extra></extra>"))
+    return _pl(fig, height or max(260, 46 * len(matrix) + 80), legend=False)
+
+
+def pl_pareto(df: pd.DataFrame, title: str, money: str = ""):
+    """Loss by item (bars, losses first) with the running share of the total loss (line, right axis)."""
+    import plotly.graph_objects as go
+    fig = go.Figure([
+        go.Bar(x=df.ITEM, y=df.CHANGE, marker_color=[TERRA if v < 0 else TEAL for v in df.CHANGE], name="Change in value sales",
+               hovertemplate="%{x}<br>Change: %{y:+,.0f}" + (f" {money}" if money else "") + "<extra></extra>"),
+        go.Scatter(x=df.ITEM, y=100 * df.CUM_SHARE_OF_LOSS, yaxis="y2", mode="lines+markers", line=dict(color=GOLD, width=2.5),
+                   name="Running share of the loss, %", hovertemplate="%{x}<br>%{y:.0f}% of the loss so far<extra></extra>"),
+    ])
+    fig.add_hline(y=80, line=dict(color=GOLD, dash="dot", width=1), yref="y2")
+    fig.update_layout(yaxis=dict(title=title), yaxis2=dict(overlaying="y", side="right", range=[0, 105], showgrid=False,
+                                                           title="% of loss"))
+    return _pl(fig, 340)
+
+
+def pl_risk(shifts: pd.DataFrame, names: dict, money: str = "", focus: str | None = None, high: float = 0.8):
+    """The director's risk matrix: each shift in the run at its confidence (x) and value at stake (y), sized by the share
+    move, teal for gains and terracotta for losses, the focus shift outlined in gold. The "Act now" line sits at
+    `high`, the confidence where format.confidence starts saying High. Not selectable (B21); the page offers a picker."""
+    import plotly.graph_objects as go
+    d = shifts.assign(ABS=shifts.VALUE_AT_STAKE.abs(), MOVE=shifts.D_SHARE_PTS.abs())
+    fig = go.Figure(go.Scatter(
+        x=d.CONFIDENCE, y=d.ABS, mode="markers+text", text=[names.get(s, s) for s in d.SHIFT_ID], textposition="top center",
+        customdata=d.SHIFT_ID, marker=dict(size=18 + 28 * (d.MOVE / max(d.MOVE.max(), 1e-9)),
+                                           color=[TERRA if v < 0 else TEAL for v in d.D_SHARE_PTS], opacity=0.8,
+                                           line=dict(color=[GOLD if s == focus else WHITE for s in d.SHIFT_ID],
+                                                     width=[4 if s == focus else 1 for s in d.SHIFT_ID])),
+        hovertemplate="%{text}<br>Confidence %{x:.2f}<br>Value at stake %{y:,.0f}" + (f" {money}" if money else "")
+                      + "<extra></extra>"))
+    fig.add_vline(x=high, line=dict(color=SEA, dash="dot"))
+    fig.add_annotation(x=1.0, y=1.0, xref="paper", yref="paper", text="Act now", showarrow=False, font=dict(color=TERRA))
+    fig.add_annotation(x=0.0, y=1.0, xref="paper", yref="paper", text="Verify first", showarrow=False, font=dict(color=SLATE),
+                       xanchor="left")
+    fig.update_xaxes(title="Confidence (stored)", range=[0, 1.1])
+    fig.update_yaxes(title="Value at stake" + (f" ({money})" if money else ""), range=[0, 1.22 * float(d.ABS.max() or 1)])
+    return _pl(fig, 420, legend=False)

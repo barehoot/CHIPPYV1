@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import data, format as fmt, nav
+nav.entry_guard("pages/2_Brief.py")   # a refresh or direct link still opens inside the app
 
 st.html((Path(nav.__file__).with_name("radar.css")).read_text(encoding="utf-8"))   # Radar is the visual source
 

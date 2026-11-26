@@ -144,6 +144,12 @@ def holt_winters(series: pd.Series, h: int = 8) -> dict:
 
 # ---- Temporal convolutional network ---------------------------------------------------------------------------------
 
+def tcn_available() -> bool:
+    """True when PyTorch can be imported (TCN runs); checked without importing it."""
+    import importlib.util
+    return importlib.util.find_spec("torch") is not None
+
+
 def tcn(series: pd.Series, h: int = 8, lookback: int = TCN_LOOKBACK, epochs: int = TCN_EPOCHS) -> dict:
     """A small temporal convolutional network: three dilated causal 1-D convolution blocks (dilation 1, 2, 4) over a
     12-week window, trained on the standardised series with a fixed seed, forecasting one step at a time."""

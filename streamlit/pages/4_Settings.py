@@ -6,6 +6,7 @@ import json
 import streamlit as st
 
 from sr_ui import data, nav
+nav.entry_guard("pages/4_Settings.py")   # a refresh or direct link still opens inside the app
 
 nav.radar_header("Settings", "Thresholds and options for the weekly run")     # loads radar.css (floating assistant)
 if not nav.is_admin():

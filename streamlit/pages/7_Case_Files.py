@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import charts, data, format as fmt, nav, workspace
+nav.entry_guard("pages/7_Case_Files.py")   # a refresh or direct link still opens inside the app
 
 extra = nav.radar_header("Case Files", "Structured investigations of significant shifts")
 cases = workspace.cases()

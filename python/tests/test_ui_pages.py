@@ -29,6 +29,70 @@ SETTINGS = {"AS_OF_WEEK_END": "2026-11-07", "SCOPE_CATEGORY": "Biscuits", "SCOPE
             "MIN_SHARE_PTS": 0.3, "NOTIFY_EMAILS": ["a@x.com"], "NOTIFY_ALLOWED": ["a@x.com"]}
 
 
+PANEL_BRANDS = {  # brand -> (manufacturer, base price, price elasticity, base units) — invented sample brands
+    "Crunchy": ("Acme Foods", 20.0, -1.9, 900), "Golden Bake": ("Rival Co", 18.0, -2.2, 700),
+    "Tea Time": ("Tea Co", 15.0, -1.6, 500), "Nutri Crisp": ("Acme Foods", 22.0, -2.4, 300),
+    "Store Brand": ("Private Label", 12.0, -1.4, 450)}
+PANEL_RETAILERS = {"East Retail": ("M1", "East"), "North Retail": ("M2", "North"), "South Retail": ("M3", "South"),
+                   "West Retail": ("M4", "West")}
+
+
+def synthetic_panels() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(brand panel, Crunchy SKU panel) for Insight Studio: 104 weeks x 4 retailers x 5 brands with known price
+    elasticities and distribution response (units ~ price^e x ACV^1.1), promotions, a season, Crunchy losing
+    distribution and Golden Bake gaining it over the last 10 weeks, and two planted SKU anomalies. Fixed seed. The
+    derived columns repeat data.brand_panel's and data.sku_week_panel's SQL so the fake has the same shape."""
+    global _PANELS
+    if "_PANELS" in globals():
+        return _PANELS
+    rng = np.random.default_rng(65)
+    weeks = pd.date_range(end="2026-11-07", periods=104, freq="7D")
+    rows = []
+    for retailer, (mid, region) in PANEL_RETAILERS.items():
+        r_scale = rng.uniform(0.8, 1.2)
+        for brand, (mfr, p0, el, u0) in PANEL_BRANDS.items():
+            for t, wk in enumerate(weeks):
+                late = max(0, t - 93) / 10                                  # 0 before the last 10 weeks, then up to 1
+                acv = {"Crunchy": 82 - 20 * late, "Golden Bake": 70 + 12 * late}.get(brand, 76) + rng.normal(0, 1.2)
+                promo = rng.random() < 0.12
+                price = p0 * (1 + 0.0004 * t) * (0.85 if promo else 1.0) * rng.normal(1, 0.01)
+                season = 1 + 0.08 * np.sin(2 * np.pi * t / 52)
+                units = u0 * r_scale * season * (price / p0) ** el * (acv / 80) ** 1.1 * rng.lognormal(0, 0.05)
+                rows.append({"WEEK_END_DATE": wk, "MARKET_ID": mid, "RETAILER": retailer, "REGION": region,
+                             "MANUFACTURER": mfr, "BRAND": brand, "VALUE_SALES": units * price, "UNIT_SALES": units,
+                             "VOLUME_SALES": units * 0.25, "ACV_DIST_PCT": min(acv, 99.0),
+                             "STORES_SELLING": int(round(acv * 1.6)), "SKUS_SELLING": 4 if brand != "Store Brand" else 2})
+    b = pd.DataFrame(rows)
+    g = b.groupby(["WEEK_END_DATE", "MARKET_ID"])
+    b["VALUE_SHARE_PCT"] = 100 * b.VALUE_SALES / g.VALUE_SALES.transform("sum")
+    b["PRICE_PER_UNIT"] = b.VALUE_SALES / b.UNIT_SALES
+    b["PRICE_INDEX"] = b.PRICE_PER_UNIT / (g.VALUE_SALES.transform("sum") / g.UNIT_SALES.transform("sum"))
+    sk = []
+    for r in b[b.BRAND == "Crunchy"].itertuples(index=False):
+        for i, w in zip(range(1, 5), (0.2, 0.25, 0.25, 0.3)):
+            v = r.VALUE_SALES * w * rng.lognormal(0, 0.04)
+            u = r.UNIT_SALES * w * rng.lognormal(0, 0.04)
+            sk.append({"WEEK_END_DATE": r.WEEK_END_DATE, "RETAILER": r.RETAILER, "REGION": r.REGION,
+                       "PRODUCT_ID": f"P{i}", "ITEM_DESC": f"Crunchy {i}00g", "SEGMENT": "Chips", "PACK_SIZE": f"{i}00g",
+                       "VALUE_SALES": v, "UNIT_SALES": u, "ACV_DIST_PCT": r.ACV_DIST_PCT - 2 * i,
+                       "STORES_SELLING": r.STORES_SELLING})
+    k = pd.DataFrame(sk)
+    k = k[k.WEEK_END_DATE > weeks[-53]].reset_index(drop=True)
+    spike = (k.WEEK_END_DATE == weeks[-6]) & (k.RETAILER == "North Retail") & (k.ITEM_DESC == "Crunchy 300g")
+    k.loc[spike, ["VALUE_SALES", "UNIT_SALES"]] *= 3.2                     # planted: a feed spike
+    gap = (k.WEEK_END_DATE == weeks[-3]) & (k.RETAILER == "West Retail") & (k.ITEM_DESC == "Crunchy 100g")
+    k.loc[gap, "ACV_DIST_PCT"] = 12.0                                      # planted: a distribution gap
+    k["PRICE_PER_UNIT"] = k.VALUE_SALES / k.UNIT_SALES
+    k = k.sort_values(["RETAILER", "PRODUCT_ID", "WEEK_END_DATE"])
+    gk = k.groupby(["RETAILER", "PRODUCT_ID"])
+    k["SALES_WOW"] = k.VALUE_SALES / gk.VALUE_SALES.shift() - 1
+    k["PRICE_WOW"] = k.PRICE_PER_UNIT / gk.PRICE_PER_UNIT.shift() - 1
+    k["ACV_WOW"] = k.ACV_DIST_PCT - gk.ACV_DIST_PCT.shift()
+    k["UNITS_PER_STORE"] = k.UNIT_SALES / k.STORES_SELLING
+    _PANELS = (b, k.sort_values(["WEEK_END_DATE", "RETAILER", "ITEM_DESC"]).reset_index(drop=True))
+    return _PANELS
+
+
 def build_fake():
     import sr_ui.data as real
     fake = types.ModuleType("sr_ui.data")
@@ -112,6 +176,15 @@ def build_fake():
                                               "EVIDENCE": [{"weeks": ["2026-10-31"], "source": "CORE.DT_CAT_WEEK"}]}),
         "trend": lambda *a: trend, "brand_sales_week": lambda *a: sales, "region_summary": lambda *a, **k: regions,
         "sku_retailer": lambda *a, **k: skus, "brand_share_weeks": lambda *a, **k: shares,
+        "brand_panel": lambda category, weeks=104: synthetic_panels()[0],
+        "portfolio": lambda rid: (lambda d: {"N_SHIFTS": len(d), "VALUE_LOSS": d.VALUE_AT_STAKE.clip(upper=0).sum(),
+                                             "VALUE_GAIN": d.VALUE_AT_STAKE.clip(lower=0).sum(),
+                                             "N_LOSS": int((d.VALUE_AT_STAKE < 0).sum()), "N_GAIN": int((d.VALUE_AT_STAKE > 0).sum()),
+                                             "N_CONFIRMED": int(d.ANOMALY_CONFIRMED.fillna(False).astype(bool).sum()),
+                                             "N_DATA_EFFECT": int((d.ARTEFACT_LABEL == "POSSIBLE_DATA_EFFECT").sum())}
+                                  )(shifts[shifts.SELECTED]),
+        "sku_week_panel": lambda category, brand, weeks=52: synthetic_panels()[1] if brand == "Crunchy"
+        else synthetic_panels()[1].iloc[0:0],
         "ask_agent": lambda q, t=None, p=0, agent=None: calls.append(("ask", agent)) or {
             "text": "Answer", "tables": [], "tools": ["data_analyst"], "warnings": [], "thread_id": 1, "message_id": 2},
         "what_if": lambda *a: {"share_now_pts": 23.41, "share_if_pts": 24.9, "delta_pts": 1.49,
@@ -441,3 +514,144 @@ def test_ask_chippy_welcome_then_thread(fake_data):
     assert "What would you like to explore?" not in _texts(at)             # the welcome hides once a chat starts
     msgs = at.session_state["chats"][fake_data.AGENT]["msgs"]
     assert [m["role"] for m in msgs] == ["user", "assistant"] and msgs[1]["text"] == "Answer"
+
+# ---- SR-065: Insight Studio, the Ask Chippy agent picker, interval mascots, direct links ------------------------
+
+def _studio(main: str = "streamlit_app.py") -> AppTest:
+    at = AppTest.from_file(str(APP_DIR / main), default_timeout=120)
+    at.run()
+    at.switch_page("pages/1_Shift_detail.py")
+    at.session_state["shift_view"] = "Studio"
+    at.run()
+    return at
+
+
+def _clean(at: AppTest) -> None:
+    assert not at.exception, [e.value for e in at.exception]
+    alerts = [w.value for w in at.warning] + [e.value for e in at.error]
+    assert not alerts, alerts
+    assert "Couldn't load" not in _texts(at)
+
+
+def test_studio_every_lens_and_model_renders(fake_data):
+    at = _studio()
+    _clean(at)
+    assert "Exploratory · not in the brief" in _texts(at) and "What to do" in _texts(at)   # Company Manager by default
+    for lens, expect in [("director", "Board line"), ("amanager", "Priority list"), ("analyst", "Workbench"),
+                         ("scientist", "**Method.**")]:
+        at.session_state["studio_lens"] = lens
+        at.run()
+        _clean(at)
+        assert expect in _texts(at), (lens, expect)
+    for model in ["elasticity", "causal", "changepoint", "drivers", "segments", "anomaly", "cannibal"]:
+        at.session_state["studio_model"] = model
+        at.run()
+        _clean(at)
+
+
+def test_studio_workbench_chart_types(fake_data):
+    at = _studio()
+    at.session_state["studio_lens"] = "analyst"
+    at.run()
+    for kind in ["Line", "Bar", "Area", "Scatter", "Box", "Heatmap"]:
+        at.session_state["wb_kind"] = kind
+        at.run()
+        _clean(at)
+    at.session_state["wb_src"] = at.radio(key="wb_src").options[1]
+    at.run()
+    _clean(at)
+
+
+def test_studio_save_to_case_file(fake_data):
+    at = _studio()
+    next(b for b in at.button if b.key == "sr_studio_case_mgr").click().run()
+    _clean(at)
+    cases = at.session_state["sr_ws"]["cases"]
+    assert len(cases) == 1 and any("Decision brief" in n["text"] for c in cases.values() for n in c.get("notes", []))
+
+
+def test_ask_chippy_auto_routes_and_offers_the_other_agent(fake_data):
+    at = _run("streamlit_app.py", "pages/5_Ask_Chippy.py")
+    assert {"sr_agent_pick_auto", "sr_agent_pick_chippy", "sr_agent_pick_analyst"} <= {b.key for b in at.button}
+    next(b for b in at.button if b.key == "sr_agent_pick_auto").click().run()
+    assert at.session_state["chat_agent"] == "AUTO" and not at.exception
+    at.session_state["chat_agent"] = "AUTO"        # AppTest replays a radio's stale value after a callback set it
+    at.run()
+    at.chat_input[0].set_value("Which brands have the highest value share?").run()
+    assert ("ask", "SR_DB.SEM.RADAR_ANALYST_AGENT") in fake_data.calls
+    msg = at.session_state["chats"]["AUTO"]["msgs"][-1]
+    assert msg["agent_id"] == "SR_DB.SEM.RADAR_ANALYST_AGENT" and "ranking" in msg["routed"]
+    # The re-ask itself is checked in a browser: AppTest replays a stale radio value after the button's callback.
+    other = at.button(key=f"sr_ask_other_{len(at.session_state['chats']['AUTO']['msgs']) - 1}")
+    assert other.label == "Ask Chippy instead" and not at.exception
+
+
+def test_floating_panel_asks_the_chosen_agent(fake_data):
+    at = _run("streamlit_app.py", "pages/2_Brief.py")
+    at.button(key="sr_radar_open").click().run()
+    assert at.radio(key="sr_fab_agent").value == fake_data.AGENT
+    at.radio(key="sr_fab_agent").set_value("SR_DB.SEM.RADAR_ANALYST_AGENT").run()
+    assert not at.exception
+
+
+def test_mascot_pulses_rest_and_vary_by_visit():
+    from PIL import Image
+    from sr_ui import nav
+    for names in nav.PULSE_SETS.values():
+        for n in names:
+            im = Image.open(nav.PULSE_DIR / f"{n}.webp")
+            assert im.size == (192, 192) and (nav.PULSE_DIR / f"{n}.png").exists()
+            durations = []
+            for i in range(im.n_frames):
+                im.seek(i)
+                im.load()
+                durations.append(im.info.get("duration") or 0)
+            assert max(durations) >= 5000, n                    # it rests for seconds between plays
+    assert nav._pulse("investigating") is None                   # working states keep the live loop
+    assert set(nav.PULSE_SETS["detective"]) == {"hero_mix", "detective", "think_mix"}
+
+
+def test_entry_guard_is_on_every_page():
+    for page in sorted((APP_DIR / "pages").glob("*.py")):
+        assert f'nav.entry_guard("pages/{page.name}")' in page.read_text(encoding="utf-8"), page.name
+
+
+def test_studio_masks_names_when_display_alias_is_on(fake_data, monkeypatch):
+    real = list(PANEL_BRANDS) + sorted({m for m, *_ in PANEL_BRANDS.values()})
+    alias = {**{("BRAND", b): f"Brand {chr(65 + i)}" for i, b in enumerate(PANEL_BRANDS)},
+             **{("MANUFACTURER", m): f"Maker {i + 1}" for i, m in enumerate(sorted({m for m, *_ in PANEL_BRANDS.values()}))}}
+    monkeypatch.setitem(SETTINGS, "DISPLAY_ALIAS", True)
+    monkeypatch.setattr(fake_data, "aliases", lambda: alias)
+    at = _studio()
+    for lens in ["manager", "director", "amanager", "analyst", "scientist"]:
+        at.session_state["studio_lens"] = lens
+        at.run()
+        _clean(at)
+        shown = ""
+        if lens == "analyst":                                       # also the manufacturer colour and the SKU source
+            at.session_state["wb_colour"] = "MANUFACTURER"
+            at.run()
+            shown += " ".join(df.value.to_csv() for df in at.dataframe) + " ".join(str(e.proto) for e in at.get("plotly_chart"))
+            at.session_state["wb_src"] = at.radio(key="wb_src").options[1]
+            at.run()
+            _clean(at)
+        shown += " ".join(df.value.to_csv() for df in at.dataframe)
+        shown += " ".join(str(e.proto) for e in at.get("plotly_chart"))
+        leaked = [n for n in real if n in shown]
+        assert not leaked, (lens, leaked)
+        if lens in ("director", "analyst", "scientist"):
+            assert "Brand A" in shown or "SKU 1" in shown, lens           # the check reads real chart and table content
+    for model in ["anomaly", "segments", "cannibal", "elasticity"]:
+        at.session_state["studio_model"] = model
+        at.run()
+        shown = " ".join(df.value.to_csv() for df in at.dataframe) + " ".join(str(e.proto) for e in at.get("plotly_chart"))
+        assert not [n for n in real if n in shown], model
+
+
+def test_floating_panel_question_goes_to_the_chosen_agent(fake_data):
+    at = _run("streamlit_app.py", "pages/2_Brief.py")
+    at.button(key="sr_radar_open").click().run()
+    at.session_state["sr_fab_agent"] = "SR_DB.SEM.RADAR_ANALYST_AGENT"
+    at.run()
+    next(b for b in at.button if (b.key or "").startswith("sr_fab_sugg_")).click().run()
+    assert ("ask", "SR_DB.SEM.RADAR_ANALYST_AGENT") in fake_data.calls and not at.exception

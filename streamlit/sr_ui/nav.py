@@ -625,6 +625,22 @@ if (BRAND_DIR / "chippy_logo_light.png").exists():
 FAVICON = BRAND_DIR / "chippy_favicon.png"     # browser tab icon: local Streamlit only (Snowflake ignores page_icon)
 
 
+def entry_guard(page_file: str) -> None:
+    """Call first on every page. On a fresh server process, a first visit straight to a page address (a refresh, a
+    bookmark, a shared link) runs that page in Streamlit's legacy pages/ mode, without the entry script: no session
+    defaults, no admin flag, a sidebar of raw file names. Send that visit through the entry script, which opens the
+    asked-for page again with its query (for example ?view=) once st.navigation is in place."""
+    if "sr_admin" in st.session_state:                  # nav.run already ran in this session
+        return
+    from streamlit.runtime.scriptrunner import get_script_run_ctx
+    ctx = get_script_run_ctx()
+    if ctx is None:
+        return
+    st.session_state["_sr_goto"] = (page_file, dict(st.query_params))
+    # pages_manager is internal to Streamlit; it is stable on the pinned 1.51.0 (environment.yml). Recheck on upgrade.
+    st.switch_page(Path(ctx.pages_manager.main_script_path).name)
+
+
 def run(admin: bool) -> None:
     for key, value in DEFAULTS.items():
         st.session_state.setdefault(key, value)
@@ -637,6 +653,13 @@ def run(admin: bool) -> None:
         st.set_page_config(page_icon=str(FAVICON))       # additive: overrides only the entry point's icon
     st.logo(LOGO, size="large", icon_image=LOGO_ICON)
     page = st.navigation(sections)     # with st.navigation, Streamlit ignores automatic pages/ discovery
+    goto = st.session_state.pop("_sr_goto", None)       # a direct visit sent here by entry_guard: reopen that page
+    if goto and goto[0] in {f for f, *_ in entries}:   # never a page this app does not list (Settings in read-only)
+        st.session_state["_sr_goto_query"] = goto[1]
+        st.switch_page(goto[0])
+    if (query := st.session_state.pop("_sr_goto_query", None)):
+        for k, v in query.items():
+            st.query_params.setdefault(k, v)
     # Remember the page shown before this one, so Radar can say "You're back!" (same session only)
     if st.session_state.get("chippy_page") != page.title:
         st.session_state["chippy_visit"] = st.session_state.get("chippy_visit", 0) + 1     # one per page visit
@@ -750,17 +773,20 @@ def mascot_html(pose: str, alt: str, size: int = 72, *, html_safe: bool = False)
     radar_anim, radar_still = radar_dir / f"{name}.webp", radar_dir / f"{name}.png"
     if radar_anim.exists() and radar_still.exists():
         anim, still = radar_anim, radar_still
+    motion = ""
+    if name and (pulse := _pulse(name)):                 # idle states: play, rest, and a different pose per visit
+        anim, still, motion = pulse
     if not name or not anim.exists() or not still.exists():
         return None
     if html_safe:
         # st.html sanitizes data-URI srcset attributes. Switch ordinary img sources via the motion media query.
-        return ('<picture class="sr-chippy sr-chippy-html">'
+        return (f'<picture class="sr-chippy sr-chippy-html {motion}">'
                 f'<img class="sr-chippy-animated" src="{_data_uri(str(anim), "image/webp")}" '
                 f'width="{size}" height="{size}" alt="{escape(alt)}">'
                 f'<img class="sr-chippy-still" src="{_data_uri(str(still), "image/png")}" '
                 f'width="{size}" height="{size}" alt="{escape(alt)}"></picture>')
     # The animation is offered only when motion is welcome; otherwise (or without WebP) the browser shows the still.
-    return (f'<picture class="sr-chippy"><source type="image/webp" media="(prefers-reduced-motion: no-preference)" '
+    return (f'<picture class="sr-chippy {motion}"><source type="image/webp" media="(prefers-reduced-motion: no-preference)" '
             f'srcset="{_data_uri(str(anim), "image/webp")}">'
             f'<img src="{_data_uri(str(still), "image/png")}" width="{size}" height="{size}" alt="{escape(alt)}" '
             f'decoding="async"></picture>')
@@ -811,16 +837,55 @@ def radar_header(title: str, subtitle: str):
 
 
 RADAR_ANIM_DIR = MASCOT_DIR / "radar"     # the supplied animations with transparent backgrounds (looping WebP + still)
+PULSE_DIR = RADAR_ANIM_DIR / "pulse"      # interval versions built by scripts/build_mascot_pulse.py from the same frames
+# Idle states play their pose, then rest for several seconds, and show a different pose (or mix of poses) on each page
+# visit. States that mean "working" (investigating, loading, working) keep the live loop, so activity reads as activity.
+PULSE_SETS = {"welcome": ["welcome", "hello_mix"], "detective": ["hero_mix", "detective", "think_mix"],
+              "success": ["success", "hello_mix"], "resting": ["resting", "rest_mix"]}
+IDLE_MOTION = ["sr-idle-hop", "sr-idle-tilt", "sr-idle-bob"]     # small CSS moves between plays (radar.css)
+
+
+def _pulse(name: str) -> tuple[Path, Path, str] | None:
+    """(animation, still, motion class) for an idle state, chosen by the page-visit count: the same on every rerun of
+    one visit (so Streamlit does not restart it), different on the next visit. None for working states."""
+    options = PULSE_SETS.get(name)
+    if not options:
+        return None
+    try:
+        n = int(st.session_state.get("chippy_visit", 0))
+    except Exception:                                    # noqa: BLE001 - outside a script run (imports, tests)
+        n = 0
+    pick = options[n % len(options)]
+    anim, still = PULSE_DIR / f"{pick}.webp", PULSE_DIR / f"{pick}.png"
+    if not (anim.exists() and still.exists()):
+        return None
+    return anim, still, IDLE_MOTION[n % len(IDLE_MOTION)]
+
+
+def pulse_img(pick: str, alt: str, size: int = 64, animate: bool = True) -> str:
+    """One pulse animation by name (PULSE_DIR), or only its still when animate is False (so a page can bring one
+    mascot to life, for example the chosen agent card, and keep the rest still). Empty if the files are missing."""
+    anim, still = PULSE_DIR / f"{pick}.webp", PULSE_DIR / f"{pick}.png"
+    if not still.exists():
+        return ""
+    s = f'<img class="sr-anim-still" src="{_data_uri(str(still), "image/png")}" width="{size}" height="{size}" alt="{escape(alt)}">'
+    if not animate or not anim.exists():
+        return f'<span class="sr-anim sr-anim-static">{s.replace("sr-anim-still", "sr-anim-play")}</span>'
+    return (f'<span class="sr-anim sr-idle-hop"><img class="sr-anim-play" src="{_data_uri(str(anim), "image/webp")}" '
+            f'width="{size}" height="{size}" alt="{escape(alt)}">{s}</span>')
 
 
 def radar_anim(name: str, alt: str, size: int = 72) -> str:
     """A supplied transparent Chippy animation as a <picture>: the animated WebP, or its still frame when the viewer
     prefers reduced motion. Bundled as data URIs. Empty if the files are missing (the text still reads on its own)."""
     anim, still = RADAR_ANIM_DIR / f"{name}.webp", RADAR_ANIM_DIR / f"{name}.png"
+    motion = ""
+    if (pulse := _pulse(name)):
+        anim, still, motion = pulse
     if not anim.exists() or not still.exists():
         return ""
     # st.html removes data-URI srcset attributes, so both images are plain <img>; CSS shows one by motion preference.
-    return (f'<span class="sr-anim"><img class="sr-anim-play" src="{_data_uri(str(anim), "image/webp")}" '
+    return (f'<span class="sr-anim {motion}"><img class="sr-anim-play" src="{_data_uri(str(anim), "image/webp")}" '
             f'width="{size}" height="{size}" alt="{escape(alt)}"><img class="sr-anim-still" '
             f'src="{_data_uri(str(still), "image/png")}" width="{size}" height="{size}" alt="{escape(alt)}"></span>')
 
@@ -1079,23 +1144,32 @@ def _fab_show(msg: dict, docked: bool = False) -> None:
             st.caption(w)
 
 
+def _fab_agent() -> str:
+    """The agent the floating panel asks: the panel's own switch, else Chippy. Always one of data.AGENTS."""
+    from sr_ui import data
+    a = st.session_state.get("sr_fab_agent")
+    return a if a in data.AGENTS else data.AGENT
+
+
 def _fab_ask(chat: dict, question: str, slot) -> None:
     from sr_ui import data
+    agent = _fab_agent()
+    who = data.AGENTS[agent]["label"]
     chat["msgs"].append({"role": "user", "text": question})
-    mascot("thinking", "Let me think…", "Chippy is checking the numbers.", key="fab_wait", container=slot)
+    mascot("thinking", "Let me think…", f"{who} is checking the numbers.", key="fab_wait", container=slot)
     try:
-        r = data.ask_agent(question, chat["thread"], chat["parent"], agent=data.AGENT)
+        r = data.ask_agent(question, chat["thread"], chat["parent"], agent=agent)
     except Exception as e:                                       # noqa: BLE001 - fail soft, like the Ask Chippy page
         slot.empty()
-        msg = {"role": "assistant", "agent": "Chippy", "agent_id": data.AGENT, "failed": True,
-               "text": "Chippy couldn't answer that just now. Try again in a moment."}
+        msg = {"role": "assistant", "agent": who, "agent_id": agent, "failed": True,
+               "text": f"{who} couldn't answer that just now. Try again in a moment."}
         if is_admin():
             msg["warnings"] = [str(e)[:300]]
         chat["msgs"].append(msg)
         return
     slot.empty()
     chat["thread"], chat["parent"] = r["thread_id"], r["message_id"]
-    chat["msgs"].append({"role": "assistant", "agent": "Chippy", "agent_id": data.AGENT, "question": question,
+    chat["msgs"].append({"role": "assistant", "agent": who, "agent_id": agent, "question": question,
                          **{k: r[k] for k in ("text", "tables", "tools", "warnings")}})
 
 
@@ -1117,7 +1191,7 @@ def assistant(page_title: str) -> None:
 
     with st.container(key="sr_radar_launcher"):
         st.button("Ask Chippy AI", key="sr_radar_open", on_click=_toggle_radar_assistant)
-        welcome = MASCOT_DIR / "radar"
+        welcome = PULSE_DIR if (PULSE_DIR / "welcome.webp").exists() else MASCOT_DIR / "radar"   # waves, then rests
         animated = _data_uri(str(welcome / "welcome.webp"), "image/webp")
         still = _data_uri(str(welcome / "welcome.png"), "image/png")
         target = ".st-key-sr_radar_launcher button::before"
@@ -1129,7 +1203,8 @@ def _assistant_panel(page_title: str, docked: bool = False) -> None:
     from sr_ui import data
 
     chats = st.session_state.setdefault("chats", {})
-    chat = chats.setdefault(data.AGENT, {"msgs": [], "thread": None, "parent": 0})
+    agent = _fab_agent()
+    chat = chats.setdefault(agent, {"msgs": [], "thread": None, "parent": 0})   # shared with the Ask Chippy page
     key = "sr_radar_dock" if docked else "sr_fab_panel"
     with st.container(key=key):
         if docked:
@@ -1156,8 +1231,14 @@ def _assistant_panel(page_title: str, docked: bool = False) -> None:
                 st.switch_page("pages/5_Ask_Chippy.py")
             if (docked or chat["msgs"]) and st.button("", icon=":material/add_comment:", key="sr_fab_new", help="New conversation",
                                           type="tertiary"):
-                chats[data.AGENT] = {"msgs": [], "thread": None, "parent": 0}
+                chats[agent] = {"msgs": [], "thread": None, "parent": 0}
                 st.rerun()
+        if st.session_state.get("sr_fab_agent") not in data.AGENTS:
+            st.session_state["sr_fab_agent"] = data.AGENT
+        with st.container(key="sr_fab_agent_pick"):       # a radio styled as chips (B17: AppTest reruns radios)
+            st.radio("Who answers", list(data.AGENTS), key="sr_fab_agent", horizontal=True,
+                     format_func=lambda a: data.AGENTS[a]["label"], label_visibility="collapsed",
+                     help=" · ".join(f"{v['label']}: {v['purpose']}" for v in data.AGENTS.values()))
         unavailable = getattr(data, "AI_UNAVAILABLE_REASON", None) if docked else None
         if docked:
             tab = st.radio("Assistant view", ["Ask", "History"], horizontal=True, label_visibility="collapsed",

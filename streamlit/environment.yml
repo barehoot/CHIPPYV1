@@ -9,3 +9,5 @@ dependencies:
   - altair
   - statsmodels               # Shift detail: ARIMA, SARIMA, Holt-Winters, STL, ADF (sr_ui/forecast.py)
   - pytorch                   # Shift detail: the TCN forecast (CPU); loaded only when TCN is selected
+  - plotly                    # Insight Studio: interactive charts with selection and drawing tools
+  - scikit-learn              # Insight Studio: gradient boosting, k-means, Isolation Forest

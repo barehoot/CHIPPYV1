@@ -102,3 +102,46 @@ they are measured, never estimated.
   effective market and period for regional and SKU analysis, which currently use latest-available source data.
 - **Market Time Machine phase.** Older runs display their stored briefs, but the Open in Weekly Brief action
   only appears for entries in the recent-brief picker. Support navigation to the selected historical brief by ID.
+
+## UI follow-up decisions (SR-065, 2026-11-26)
+
+- **B19 Insight Studio computes models in the app, labelled exploratory.** Shift Detail gains a sixth tab, Insight
+  Studio (`?view=studio`), with five role lenses (Analytics Director, Company Manager, Analytics Manager, Data Analyst,
+  Data Scientist). Aggregates it needs (price per unit, value share of the retailer's category, price index, week-on-week
+  changes) are computed in SQL in two new SELECT-only reads, `data.brand_panel` and `data.sku_week_panel`, on
+  `APP.V_UI_SKU_WEEK`, which the app roles can already read. The models SQL cannot fit (OLS elasticity, change point,
+  synthetic-control causal impact, gradient boosting, k-means, Isolation Forest, cannibalisation) run in
+  `sr_ui/analytics.py`, as the Future Trends forecasts already do in `sr_ui/forecast.py`. Every studio view says
+  "Exploratory · not in the brief" and has a model card; nothing feeds the fact pack, the brief or a stored table, so
+  rule 8 (the brief's numbers come only from the fact pack) holds. The workbench's free pivots group the panel's rows in
+  pandas, because a viewer-chosen pivot cannot be a fixed bound query.
+- **B20 Plotly and scikit-learn join the app's packages.** Plotly gives what Altair cannot: box and lasso selection read
+  back by the page, and freehand drawing (line, open path, rectangle, circle, eraser) from the chart toolbar.
+  scikit-learn fits the ML models. Both are in the Snowflake Anaconda channel (`environment.yml`) and in
+  `requirements-demo.txt`. Plotly figures are built only in `sr_ui/charts.py` with the same palette and type, and loaded
+  lazily so pages that never open the studio never import it. Altair stays for every existing chart; the trend,
+  forecast and decomposition charts gained drag-to-pan and scroll-to-zoom on the week axis.
+- **B21 Test-harness limits shape three widgets (as B17).** AppTest 1.51 cannot rerun a page after it drew a keyed or
+  selectable Plotly chart, a `select_slider` of dates or a `download_button`. So non-selecting Plotly charts carry no
+  key, box/lasso selection is opt-in behind a "Select points" toggle, date ranges use `st.slider`, and the workbench's
+  CSV comes from the table's own download menu. AppTest also replays a radio's stale value after a button callback
+  changed it, so the "Ask the other agent" re-ask is verified in a browser rather than in AppTest.
+- **B22 Chippy animates at intervals, from the supplied frames.** This replaces the handover's "supplied WebP files,
+  not regenerated assets" for idle states only. `scripts/build_mascot_pulse.py` rebuilds the supplied
+  `mascot/radar/*.webp` frames into `mascot/radar/pulse/`: each plays its pose, then rests on one frame for 6.5 to
+  9 seconds, padded to a square 192 x 192 canvas so no pose stretches; mixes chain two or three poses. Idle states
+  (welcome, detective, success, resting) pick a different pulse on each page visit (same markup on every rerun of a
+  visit, so Streamlit never restarts it) plus a small transform-only CSS move (hop, tilt or bob) in the rest. Working
+  states (investigating, loading, working) keep the live loop, so activity still reads as activity. Ask Chippy's agent
+  cards animate only the chosen card. Reduced-motion viewers see stills, as before. No new art.
+- **B23 Ask Chippy: choose who answers, including Auto.** The agent picker is a row of cards (Auto, Chippy, Data
+  analyst) with each agent's purpose, best-for tags and tool names; the compact switch stays in the header. Auto sends
+  each question to one of the two agents in `data.AGENTS` by a fixed keyword rule (`sr_ui/agent_router.py`, no LLM, ties
+  to Chippy) and every routed answer says where it went and why. Any answer can be re-asked of the other agent. The
+  floating panel gained the same Chippy / Data analyst switch and shares conversations with the page. `ask_agent` and
+  the allow-list are unchanged.
+- **B24 Direct links and refreshes open inside the app.** On a fresh server process, Streamlit's legacy `pages/` mode
+  ran a page reached by its own address without the entry script: raw sidebar names (Settings listed in the read-only
+  app) and a crash on Shift Detail. Every page now calls `nav.entry_guard`, which sends that first visit through the
+  entry script and reopens the asked-for page with its query (for example `?view=`); a page the app does not list
+  falls back to Radar. File names and URL paths are unchanged.

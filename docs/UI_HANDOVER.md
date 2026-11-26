@@ -20,9 +20,9 @@ read-only app's owner role cannot execute tasks or write settings.
 | Section | Page | File | Main elements |
 | --- | --- | --- | --- |
 | Intelligence | Radar | `pages/0_Radar.py` | Hero (top shift, Chippy detective, "Pssst… I found something." whisper with typing dots), four KPI cards, Market Movement Overview, Market View map (Share / Movement / Value), Detected Market Shifts (filters, gain/loss colours, row actions), Market Momentum (four cards with sparklines; a click opens that week in Market Time Machine), All candidates |
-| | Shift Detail | `pages/1_Shift_detail.py` | One-row toolbar (shift selector, ‹ ›, period, data status, icon-only Copy / Watch / Case file); underline tabs Investigation, Future Trends, Statistical Evidence, Market Footprint, Product Intelligence (the tab is kept in the address as `?view=`) |
+| | Shift Detail | `pages/1_Shift_detail.py` | One-row toolbar (shift selector, ‹ ›, period, data status, icon-only Copy / Watch / Case file); underline tabs Investigation, Future Trends, Statistical Evidence, Market Footprint, Product Intelligence, Insight Studio (the tab is kept in the address as `?view=`; see section 2a) |
 | | Weekly Brief | `pages/2_Brief.py` | One-row toolbar (brief selector, ‹ ›, metadata, icon-only Copy); executive summary; one insight card per shift (Finding, Business impact, Recommended action, Ask next); held-back and early-warning lists; sources; print layout |
-| | Ask Chippy | `pages/5_Ask_Chippy.py` | Agent switch, welcome with four starters, thread with Table/Chart toggle, evidence chips, copy and retry; animated thinking, loading, success and error states |
+| | Ask Chippy | `pages/5_Ask_Chippy.py` | Agent cards (Auto, Chippy, Data analyst) and a compact header switch; Auto routes each question by a keyword rule and says why; welcome with four starters; thread with right-aligned own messages, Table/Chart toggle, evidence chips, copy, retry and "Ask the other agent"; animated thinking, loading, success and error states |
 | My workspace | Watchlist | `pages/6_Watchlist.py` | Followed shifts as cards with sparklines and "Since last week"; early warnings with Add to Watchlist |
 | | Case Files | `pages/7_Case_Files.py` | Status filter with counts, search, steps, evidence, decision hub (notes, reviewed flag, timeline) |
 | | Market Time Machine | `pages/8_Market_Time_Machine.py` | Read-only view of any stored week: week chips, KPI cards with difference from the latest week, archived brief, signal journey |
@@ -31,6 +31,23 @@ read-only app's owner role cannot execute tasks or write settings.
 
 The floating **Ask Chippy AI** launcher (bottom right) opens the assistant panel on Radar, Shift Detail, Weekly Brief,
 the workspace pages, Data & Trust and Settings.
+
+### 2a. Insight Studio (Shift Detail, `?view=studio`)
+
+Five lenses on the selected shift, all marked "Exploratory · not in the brief" (decision B19):
+
+| Lens | What it shows |
+| --- | --- |
+| Analytics Director | The run's value at risk and in play; a risk matrix of every shift (confidence against value at stake, the current one ringed in gold) with Focus a shift; four independent evidence checks (stored anomaly model, stored data checks, change point, causal effect) and a one-sentence board line |
+| Company Manager (default) | Value at stake (stored), sales gap since the change and run-rate gap (causal-impact model), best recovery per week; the stored "why"; actions ranked by modelled recovery from the brand's own elasticities, each with its assumption and certainty; a 13-week "if nothing changes" projection |
+| Analytics Manager | Pareto of the loss by retailer and by SKU; a retailer x lever change heatmap; a priority list with the lever that moved most and the play that fits it |
+| Data Analyst | Workbench over the brand x retailer x week panel or the brand's SKU x retailer x week panel: chart type, X, measure, aggregation, colour, brand / SKU / retailer filters and a week range; zoom, pan, freehand drawing tools; opt-in box and lasso selection with a summary of the selected points; a pivot table; the filtered rows with CSV download from the table menu |
+| Data Scientist | Model lab: Elasticity (log-log OLS, HC3), Causal impact (synthetic control with a movable start week), Change point, Driver model (gradient boosting, out-of-time R² against linear, permutation importance, partial dependence), Segments (k-means by silhouette), Anomaly scan (Isolation Forest), Cannibalisation; each with a model card |
+
+Every lens has "Explain this with Chippy" (opens Ask Chippy with a question about the view) and "Save to Case file"
+(opens the shift's case and adds the finding as a note). Reads: `data.brand_panel` and `data.sku_week_panel` (SQL does
+the shares, prices, price index and week-on-week changes). Fits are cached per shift for the session TTL; the driver
+model takes about a second, the rest under half a second on the sample data.
 
 **Workspace is session only.** Watchlist, Case Files, notes and statuses live in `st.session_state["sr_ws"]`
 (`sr_ui/workspace.py`). Nothing is written to Snowflake, so they are lost when the browser tab closes.
@@ -42,15 +59,21 @@ the workspace pages, Data & Trust and Settings.
 | `sr_ui/data.py` | Every query and action (rule 9). Reads cached with `st.cache_data(ttl=120)`; values bound with `?` parameters; task and agent names checked against fixed allow-lists |
 | `sr_ui/nav.py` | Navigation, theme tokens, headers (`radar_header`), cards, guarded sections, mascot helpers (`mascot`, `mascot_html`, `radar_anim`, `state`), the assistant launcher and panel |
 | `sr_ui/radar.css` | The shared stylesheet (Deep Teal & Mist: `#173F43`, `#F5F8F8`, teal `#1E5556`, terracotta `#C87970`, gold `#C6A879`; Manrope and Inter). New rules are appended before `</style>` |
-| `sr_ui/charts.py`, `sr_ui/market_view.py` | Altair charts and the Market View map |
+| `sr_ui/charts.py`, `sr_ui/market_view.py` | Altair charts, the Insight Studio Plotly charts (`pl_*`, toolbar with drawing tools in `PLOTLY_CONFIG`) and the Market View map |
+| `sr_ui/studio.py`, `sr_ui/analytics.py` | Insight Studio: the five lenses (UI) and the models (pure functions, unit-tested) |
+| `sr_ui/agent_router.py` | Ask Chippy's Auto rule: question to agent by keywords, with the reason shown |
 | `sr_ui/signal_journey_view.py` | Signal Journey (Data & Trust, Time Machine) |
 | `sr_ui/workspace.py` | Session-only Watchlist and Case Files |
 | `sr_ui/forecast.py` | Future Trends models (statsmodels; TCN only with PyTorch) |
-| `sr_ui/mascot/` | Original Chippy art: `radar/` holds the transparent looping WebP animations with PNG stills (welcome, investigating, loading, success, resting, detective); `anim/` holds further animations; `chippy_*.png` are static fallbacks |
+| `sr_ui/mascot/` | Original Chippy art: `radar/` holds the transparent looping WebP animations with PNG stills (welcome, investigating, loading, success, resting, detective); `radar/pulse/` holds the interval versions and mixes built from them by `scripts/build_mascot_pulse.py`; `anim/` holds further animations; `chippy_*.png` are static fallbacks |
 
 ## 4. Animation and motion
 
-- **Mascot animations** are the supplied WebP files, not regenerated assets or CSS-animated mascots:
+- **Chippy at intervals (B22).** Idle states play their pose, then rest for 6.5 to 9 seconds (`radar/pulse/`), show a
+  different pose or mix of poses on each page visit, and make a small hop, tilt or bob during the rest. Working states
+  (thinking, loading, working) keep the live loop. On Ask Chippy only the chosen agent card animates. To change the
+  rests or mixes, edit `PULSES` in `scripts/build_mascot_pulse.py` and rerun it.
+- **Mascot animations** come from the supplied WebP frames (the pulses re-time them; no new art):
   - Radar hero: detective
   - Empty states: resting
   - Ask Chippy: welcome, investigating (thinking), loading, success and resting (error)
@@ -136,6 +159,20 @@ pipeline deployment order is in `README.md`.
   process. If the apps move to the container runtime, the reads behind the row access policy must be cached per
   viewer as well.
 
+### Insight Studio and Ask Chippy follow-up (26 November 2026, SR-065)
+
+- `pytest -q python/tests tests/local`: 212 passed, 1 skipped (TCN), 1 deselected. New: `python/tests/test_analytics.py`
+  (each model recovers what the synthetic panel plants: elasticities, the distribution loss and its date, the
+  competitor that took the share, the planted SKU spike; the Auto rule) and SR-065 cases in `test_ui_pages.py` (every
+  lens, model and workbench chart type; Save to Case file; Auto routing; the panel's agent switch; pulse timing; the
+  entry guard on every page).
+- In Chrome (headless, the installed browser): cold direct links to Shift Detail tabs and to Settings in both apps;
+  every lens and the causal, driver and segment models; the Ask Chippy Auto flow including "Ask Chippy instead";
+  the Radar hero runs a pulse with a 6.5-second rest and only the idle move is animating. No exceptions, warnings or
+  console errors.
+- Needs live Snowflake: Plotly and scikit-learn from the Anaconda channel on the warehouse runtime, and studio speed on
+  real NIQ panel sizes (the panel read is 104 weeks x retailers x brands).
+
 ## 9. Known limitations
 
 - Workspace data (Watchlist, Case Files, notes) is session only by design.
@@ -145,4 +182,6 @@ pipeline deployment order is in `README.md`.
 - The sample data shows a "Market move" status on a shift where a medium data rule fired. This is a quirk of the
   sample data only.
 - The TCN forecast needs PyTorch. Without it, the model shows as unavailable and the other three models run.
-- In Ask Chippy, the user's own message bubbles are not right-aligned.
+- Insight Studio results are exploratory and computed in the app (B19); the brief and the bridge remain the numbers of
+  record. Box and lasso selection is opt-in (B21).
+- AppTest cannot follow the "Ask the other agent" re-ask (B21); it was checked in a browser.

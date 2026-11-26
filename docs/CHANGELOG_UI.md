@@ -56,3 +56,17 @@ agents alone.
    new read functions.
 
 Keep a copy of the ZIP you deploy from: it is the rollback point for the next release.
+
+## Follow-up: Insight Studio, agent picker, interval mascots, direct links (26 November 2026, SR-065)
+
+Backend impact: none. No change under `sql/`, `python/sr_lib/`, `kb/` or `eval/`; no new objects, grants or agents.
+`streamlit/sr_ui/data.py` gains two read-only `SELECT`s on `APP.V_UI_SKU_WEEK` (`brand_panel`, `sku_week_panel`).
+Decisions B19 to B24 in `docs/decisions.md`.
+
+| Change | Files |
+| --- | --- |
+| Added | `streamlit/sr_ui/studio.py`, `sr_ui/analytics.py`, `sr_ui/agent_router.py`, `sr_ui/mascot/radar/pulse/` (16 files), `scripts/build_mascot_pulse.py`, `python/tests/test_analytics.py` |
+| Modified | `streamlit/pages/*.py` (one `nav.entry_guard` line each), `pages/1_Shift_detail.py` (Insight Studio tab; TCN off by default without PyTorch; readable backtest table; fit-to-data forecast axis; "smallest decline" wording when nothing grew), `pages/5_Ask_Chippy.py` (agent cards, Auto, re-ask, right-aligned own messages), `sr_ui/nav.py` (entry guard, pulse mascots, panel agent switch), `sr_ui/charts.py` (Plotly builders; zoom and pan on trend, forecast and decomposition), `sr_ui/forecast.py` (`tcn_available`), `sr_ui/radar.css`, `sr_ui/data.py`, `streamlit/environment.yml` and `requirements-demo.txt` (plotly, scikit-learn), `python/tests/test_ui_pages.py` (synthetic panel and new cases; no assertion weakened), docs |
+
+Rollback: restore `streamlit/` and the two package files from the commit before this change and redeploy both apps.
+Nothing in Snowflake needs undoing.

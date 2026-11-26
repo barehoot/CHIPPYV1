@@ -21,6 +21,13 @@ description: Rules for the two Share Radar Streamlit in Snowflake apps (read-onl
 - Cache reads with st.cache_data(ttl=120). Never cache actions; call data.clear_cache() after one.
 - Format numbers only through sr_ui/format.py, so they read the same as in the brief.
 - Draw charts only through sr_ui/charts.py: zero baselines, signed labels, tooltips, the palette constants.
+  Bars keep a zero baseline; line charts may fit the axis to the data when the viewer chooses.
+  Insight Studio's Plotly charts (pl_* in charts.py) are the only Plotly in the app; give them no key unless they
+  are selectable, and make selection opt-in (AppTest cannot rerun keyed or selectable Plotly charts, date
+  select_sliders or download buttons; decision B21).
+- Every page calls nav.entry_guard("pages/<file>") right after its imports, so direct links open inside the app.
+- Insight Studio models live in sr_ui/analytics.py (pure, unit-tested) and are labelled exploratory; they never
+  feed the brief. Aggregates they need come from SQL in data.py.
 - On error, show a short message and a retry button. Never show a stack trace in the read-only app.
 
 ## Deploy

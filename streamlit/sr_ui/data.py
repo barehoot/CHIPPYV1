@@ -320,6 +320,74 @@ def brand_share_weeks(market_id: str, category: str, weeks: int = 26) -> pd.Data
                 ORDER BY WEEK_END_DATE, BRAND""", [market_id, category, weeks])
 
 
+# ---- Insight Studio (SR-065; cached; SELECT only, on the same APP.V_UI_SKU_WEEK view the analysis tabs read) -------
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def portfolio(run_id: str) -> dict[str, float]:
+    """The director's totals over the shifts in this run's brief (SELECTED), so no move is counted twice across
+    comparisons or markets: losses and gains at stake, how many the anomaly model confirmed (NULL counts as not
+    confirmed) and how many are possible data effects."""
+    row = _one("""SELECT COUNT(*) AS N_SHIFTS,
+                         SUM(IFF(r.VALUE_AT_STAKE < 0, r.VALUE_AT_STAKE, 0)) AS VALUE_LOSS,
+                         SUM(IFF(r.VALUE_AT_STAKE > 0, r.VALUE_AT_STAKE, 0)) AS VALUE_GAIN,
+                         COUNT_IF(r.VALUE_AT_STAKE < 0) AS N_LOSS, COUNT_IF(r.VALUE_AT_STAKE > 0) AS N_GAIN,
+                         COUNT_IF(c.ANOMALY_CONFIRMED) AS N_CONFIRMED,
+                         COUNT_IF(r.ARTEFACT_LABEL = 'POSSIBLE_DATA_EFFECT') AS N_DATA_EFFECT
+                  FROM SR_DB.APP.SHIFT_RANKED r
+                  JOIN SR_DB.APP.SHIFT_CANDIDATE c ON c.RUN_ID = r.RUN_ID AND c.SHIFT_ID = r.SHIFT_ID
+                  WHERE r.RUN_ID = ? AND r.SELECTED""", [run_id]) or {}
+    return {k: (0 if v is None or pd.isna(v) else float(v)) for k, v in row.items()}
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def brand_panel(category: str, weeks: int = 104) -> pd.DataFrame:
+    """Week x retailer x brand for one category: sales, units, distribution, stores and SKUs, with the brand's value
+    share of the retailer's category, its price per unit and its price index against the category, all in SQL. The
+    model lab, the workbench and the manager views read this one panel."""
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
+                     b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.RETAILER, s.REGION, s.MANUFACTURER, s.BRAND,
+                                  SUM(s.VALUE_SALES) AS VALUE_SALES, SUM(s.UNIT_SALES) AS UNIT_SALES,
+                                  SUM(s.VOLUME_SALES) AS VOLUME_SALES, MAX(s.ACV_DIST_PCT) AS ACV_DIST_PCT,
+                                  MAX(s.STORES_SELLING) AS STORES_SELLING, COUNT_IF(s.VALUE_SALES > 0) AS SKUS_SELLING
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ?
+                             AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, s.RETAILER, s.REGION, s.MANUFACTURER, s.BRAND)
+                SELECT WEEK_END_DATE, MARKET_ID, RETAILER, REGION, MANUFACTURER, BRAND, VALUE_SALES, UNIT_SALES,
+                       VOLUME_SALES, ACV_DIST_PCT, STORES_SELLING, SKUS_SELLING,
+                       100 * VALUE_SALES / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0)
+                           AS VALUE_SHARE_PCT,
+                       VALUE_SALES / NULLIF(UNIT_SALES, 0) AS PRICE_PER_UNIT,
+                       (VALUE_SALES / NULLIF(UNIT_SALES, 0))
+                         / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID)
+                                  / NULLIF(SUM(UNIT_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0), 0)
+                           AS PRICE_INDEX
+                FROM b ORDER BY WEEK_END_DATE, RETAILER, BRAND""", [category, weeks])
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def sku_week_panel(category: str, brand: str, weeks: int = 52) -> pd.DataFrame:
+    """Week x retailer x SKU for one brand: sales, units, price per unit, distribution and stores, with the week-on-week
+    changes the anomaly scan reads, all in SQL."""
+    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
+                     k AS (SELECT s.WEEK_END_DATE, s.RETAILER, s.REGION, s.PRODUCT_ID, s.ITEM_DESC, s.SEGMENT, s.PACK_SIZE,
+                                  s.VALUE_SALES, s.UNIT_SALES, s.ACV_DIST_PCT, s.STORES_SELLING,
+                                  s.VALUE_SALES / NULLIF(s.UNIT_SALES, 0) AS PRICE_PER_UNIT
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
+                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND s.BRAND = ?
+                             AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX))
+                SELECT k.WEEK_END_DATE, k.RETAILER, k.REGION, k.PRODUCT_ID, k.ITEM_DESC, k.SEGMENT, k.PACK_SIZE,
+                       k.VALUE_SALES, k.UNIT_SALES, k.ACV_DIST_PCT, k.STORES_SELLING, k.PRICE_PER_UNIT,
+                       VALUE_SALES / NULLIF(LAG(VALUE_SALES) OVER (PARTITION BY RETAILER, PRODUCT_ID ORDER BY WEEK_END_DATE), 0) - 1
+                           AS SALES_WOW,
+                       PRICE_PER_UNIT / NULLIF(LAG(PRICE_PER_UNIT) OVER (PARTITION BY RETAILER, PRODUCT_ID ORDER BY WEEK_END_DATE), 0) - 1
+                           AS PRICE_WOW,
+                       ACV_DIST_PCT - LAG(ACV_DIST_PCT) OVER (PARTITION BY RETAILER, PRODUCT_ID ORDER BY WEEK_END_DATE)
+                           AS ACV_WOW,
+                       UNIT_SALES / NULLIF(STORES_SELLING, 0) AS UNITS_PER_STORE
+                FROM k ORDER BY WEEK_END_DATE, RETAILER, ITEM_DESC""", [category, brand, weeks])
+
+
 # ---- Brief (cached) -------------------------------------------------------------------------------------------
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)

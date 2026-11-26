@@ -46,6 +46,10 @@ streamlit run streamlit/demo_chippy_admin.py --server.port 8502      (in a secon
 ## What works in the demo
 
 - Every page, chart, filter, mascot animation, the retractable sidebar and the floating Ask Chippy panel.
+- **Insight Studio** (Shift Detail, last tab): all five role lenses and every model run on a built-in synthetic
+  panel. Its numbers are invented and only show what the models do.
+- **Ask Chippy** agent cards and Auto routing work; Auto shows which agent a starter would go to.
+- A refresh or a link straight to a page (for example `/Shift_detail?view=studio`) opens inside the app.
 - **Watchlist** and **Case Files** keep what you add only while the browser tab stays open (as in Snowflake:
   nothing is saved). The sample data has two weeks, so Market Time Machine and "Since last week" have a
   week to compare.
@@ -56,7 +60,6 @@ streamlit run streamlit/demo_chippy_admin.py --server.port 8502      (in a secon
   data lives in `demo/` and `python/tests/`, separate from the app; nothing here is production data.
 - **Load next week**, **Rerun this week**, **Reset to week** and **Save** (Settings) don't change anything. They only
   call the sample-data stand-ins.
-- Open the apps at their root address (as above), not at a page address such as `/Brief`.
 
 ## Tests (optional)
 

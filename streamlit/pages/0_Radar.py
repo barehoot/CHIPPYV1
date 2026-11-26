@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import charts, data, format as fmt, market_view, nav, workspace
+nav.entry_guard("pages/0_Radar.py")   # a refresh or direct link still opens inside the app
 
 N_STEPS = 14
 ROW_H = 26                     # table row height in px: room to read, still dense

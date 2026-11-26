@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from sr_ui import data, format as fmt, nav
+nav.entry_guard("pages/8_Market_Time_Machine.py")   # a refresh or direct link still opens inside the app
 
 nav.radar_header("Market Time Machine", "Read-only: earlier weekly runs exactly as they were stored")
 h = data.run_history()
