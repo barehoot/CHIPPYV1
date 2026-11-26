@@ -1,6 +1,7 @@
 """Ask Chippy: the AI conversational workspace. The viewer chooses who answers (data.AGENTS, a fixed allow-list):
-Chippy (Ask-Why, SR_DB.SEM.SHARE_RADAR_AGENT), the Data analyst (SR_DB.SEM.RADAR_ANALYST_AGENT), or Auto, which sends
-each question to one of the two by a fixed keyword rule (sr_ui/agent_router.py) and says why. One thread per choice
+Chippy (Ask-Why, SR_DB.SEM.SHARE_RADAR_AGENT), the Data analyst (SR_DB.SEM.RADAR_ANALYST_AGENT), Chippy Geo (cities,
+regions and multi-year trends, SR_DB.SEM.GEO_MARKET_AGENT), or Auto, which sends
+each question to one of them by a fixed keyword rule (sr_ui/agent_router.py) and says why. One thread per choice
 per session; switching keeps the other conversations. Any answer can be re-asked of the other agent. Answers are the
 agent's own; tables are shown as returned and can be drawn as a chart of the same values (no calculation)."""
 from __future__ import annotations
@@ -21,17 +22,33 @@ agents = data.AGENTS
 AUTO = "AUTO"
 OPTIONS = [AUTO] + list(agents)
 
-# What each choice is for, shown on its card. Tools are the agent's own tool names (sql/50_sem/504 and 506).
+# What each choice is for, shown on its card. Tools are the agent's own tool names (sql/50_sem/504, 506 and 507).
 CARDS = {
     AUTO: {"label": "Auto", "pose": "hello_mix", "tag": "Smart routing",
-           "purpose": "Picks Chippy or the Data analyst for each question and shows you why. Switch any answer with one click.",
+           "purpose": "Picks the best agent for each question (Chippy, Data analyst, Geo or a specialist) and shows you why. Switch any answer with one click.",
            "best": ["Not sure who to ask", "Mixed questions"], "tools": ["keyword rule · no AI"]},
     agent_router.CHIPPY: {"pose": "hero_mix", "tag": "Ask-Why",
                           "best": ["Why share moved", "Who took it", "Real or a data effect", "What if"],
-                          "tools": ["get_share_bridge", "share_flow", "check_artefact", "what_if", "latest_brief"]},
+                          "tools": ["get_share_bridge", "share_flow", "check_artefact", "what_if", "latest_brief",
+                                    "city_breakdown", "yearly_trend"]},
     agent_router.ANALYST: {"pose": "think_mix", "tag": "Tables",
                            "best": ["Rankings", "Comparisons", "Sales by retailer", "Trends over time"],
                            "tools": ["data_analyst", "method_search"]},
+    agent_router.GEO: {"pose": "think_mix", "tag": "Cities & years",
+                       "best": ["Which cities drove it", "Region breakdowns", "Trends since 2020"],
+                       "tools": ["city_breakdown", "yearly_trend", "share_analyst", "method_search"]},
+    agent_router.RECOVERY: {"pose": "hero_mix", "tag": "Action plan",
+                            "best": ["How to win share back", "Where to act first", "What recovery is worth"],
+                            "tools": ["get_share_bridge", "city_breakdown", "share_flow", "what_if", "check_artefact"]},
+    agent_router.PRICE: {"pose": "think_mix", "tag": "Price & promo",
+                         "best": ["Price gaps", "Price rises", "Promo depth and lift"],
+                         "tools": ["price_promo", "get_share_bridge", "share_analyst"]},
+    agent_router.RISK: {"pose": "think_mix", "tag": "Early warning",
+                        "best": ["What could go wrong", "Projected share", "Seasonal or new"],
+                        "tools": ["risk_outlook", "yearly_trend", "latest_brief"]},
+    agent_router.COMPETITOR: {"pose": "think_mix", "tag": "Benchmark",
+                              "best": ["Company vs rivals", "League table", "Where we win or lose"],
+                              "tools": ["benchmark", "share_flow", "share_analyst"]},
 }
 
 
@@ -125,10 +142,37 @@ def starters() -> list[tuple[str, str]]:
               ("groups", f"Who took the share {brand} lost in {market}?"),
               ("verified_user", f"Is the {brand} drop in {market} real or a data effect?"),
               ("calendar_month", "What changed this week?")]
+    geo = [("location_city", f"Which cities drove {brand}'s share change in the last 4 weeks vs prior period?"),
+           ("map", f"Which South cities lost the most share for {brand} in the last 12 weeks vs year ago?"),
+           ("timeline", f"How has {brand}'s share in {market} developed since 2020?"),
+           ("public", f"Compare {brand}'s share across the four regions in the last 4 weeks")]
     if choice == agent_router.ANALYST:
         return analyst
+    if choice == agent_router.GEO:
+        return geo
+    focus = data.cfg("FOCUS_MANUFACTURER") or "our company"
+    special = {
+        agent_router.RECOVERY: [("healing", f"How does {brand} win back its share in {market}?"),
+                                ("location_city", f"Which city should {brand} fix first and what is it worth?"),
+                                ("checklist", f"Build a recovery plan for {brand} in South Retail"),
+                                ("verified_user", f"Is the {brand} loss real enough to act on?")],
+        agent_router.PRICE: [("sell", f"Is {brand} priced too high in {market}?"),
+                             ("percent", f"How does {brand}'s promotion compare with its rivals over the last 12 weeks?"),
+                             ("trending_up", f"Did a price rise hurt {brand} in the last 4 weeks?"),
+                             ("storefront", "Which brands are the most premium in Snacks?")],
+        agent_router.RISK: [("warning", f"What are the biggest risks for {brand} next month?"),
+                            ("notifications", "Which markets show early warning signals this week?"),
+                            ("timeline", f"Is {brand}'s decline in Pune seasonal or new?"),
+                            ("calendar_month", "What should we monitor next week?")],
+        agent_router.COMPETITOR: [("leaderboard", f"How does {focus} compare with its competitors in {market}?"),
+                                  ("emoji_events", "Who is winning in Snacks over the last 52 weeks?"),
+                                  ("map", f"Where is {focus} losing to rivals?"),
+                                  ("groups", f"Which competitor is taking share from {brand}?")],
+    }
+    if choice in special:
+        return special[choice]
     if choice == AUTO:
-        return [chippy[0], analyst[0], chippy[2], analyst[1]]
+        return [chippy[0], analyst[0], geo[0], geo[2]]
     return chippy
 
 
@@ -290,7 +334,9 @@ def agent_cards() -> None:
         cols = st.columns(len(OPTIONS), gap="small")
     for col, opt in zip(cols, OPTIONS):
         info, on = CARDS[opt], opt == choice
-        slug = "auto" if opt == AUTO else ("chippy" if opt == agent_router.CHIPPY else "analyst")
+        slug = {AUTO: "auto", agent_router.CHIPPY: "chippy", agent_router.GEO: "geo", agent_router.RECOVERY: "recovery",
+                agent_router.PRICE: "price", agent_router.RISK: "risk",
+                agent_router.COMPETITOR: "competitor"}.get(opt, "analyst")
         with col, st.container(key=f"sr_agent_card_{slug}{'_on' if on else ''}"):
             pic = nav.pulse_img(info["pose"], _label(opt), 64, animate=on)
             st.html(f'<div class="sr-agent-card-body">{pic}<div class="sr-agent-name">{escape(_label(opt))}'
@@ -344,7 +390,12 @@ if about and choice != agent_router.ANALYST and data.cfg("DISPLAY_ALIAS") is not
             picked = about
             st.session_state.pop("sr_ask_about", None)
 
-placeholder = {AUTO: "Ask anything: Auto picks the agent…", agent_router.ANALYST: "Ask Data analyst a business question…"}
+placeholder = {AUTO: "Ask anything: Auto picks the agent…", agent_router.ANALYST: "Ask Data analyst a business question…",
+               agent_router.GEO: "Ask Chippy Geo about cities, regions or years…",
+               agent_router.RECOVERY: "Ask the Recovery Strategist how to win share back…",
+               agent_router.PRICE: "Ask Pricing & Promo about price gaps and promotions…",
+               agent_router.RISK: "Ask Forecast & Risk what could go wrong next…",
+               agent_router.COMPETITOR: "Ask Competitive benchmarking how you compare with rivals…"}
 question = st.chat_input(placeholder.get(choice, f"Ask {label} about a share shift…"), disabled=bool(pending))
 if picked or question:
     q = picked or question

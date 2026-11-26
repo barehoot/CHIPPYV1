@@ -85,11 +85,20 @@ def render_markdown(llm: dict, pack: dict, currency: str) -> str:
     f = lambda t: _fill_text(t, pack, currency)  # noqa: E731
     by_id = {s["shift_id"]: s for s in pack.get("shifts", [])}
     out = [f"# {f(llm['headline'])}", "", f"_Week ending {pack.get('as_of_week', '')} · {_scope_line(pack)}_", ""]
+    if llm.get("priorities"):
+        out += ["## This week's priorities", ""] + [f"{i}. {f(p)}" for i, p in enumerate(llm["priorities"], 1)] + [""]
     for s in llm.get("shifts", []):
         p = by_id.get(s["shift_id"], {})
         out += [f"## {f(s['title'])}", "",
                 f"_{CMP_WORDS.get(p.get('cmp_code'), p.get('cmp_code', ''))} · {LABEL_WORDS.get(p.get('label'), '')}_", "",
-                f(s["why"]), "", f"**So what:** {f(s['so_what'])}", "", f"**Ask next:** {f(s['next_question'])}", ""]
+                f(s["why"]), ""]
+        if s.get("diagnosis"):
+            out += [f"**What is wrong:** {f(s['diagnosis'])}", ""]
+        if s.get("action"):
+            out += [f"**What to do:** {f(s['action'])}", ""]
+        if s.get("impact"):
+            out += [f"**What it is worth:** {f(s['impact'])}", ""]
+        out += [f"**So what:** {f(s['so_what'])}", "", f"**Ask next:** {f(s['next_question'])}", ""]
     held = pack.get("held_back", [])
     if held:
         out += ["## Held back for data checks", ""]
@@ -111,11 +120,17 @@ def render_html(llm: dict, pack: dict, currency: str) -> str:
              f'{e(pack.get("as_of_week", ""))}</span>')
     out = ['<div class="sr-brief">', f"<h1>{h(llm['headline'])}</h1>",
            f'<p class="meta">Week ending {as_of} · {e(_scope_line(pack))}</p>']
+    if llm.get("priorities"):
+        out.append("<h2>This week's priorities</h2><ol>" + "".join(f"<li>{h(p)}</li>" for p in llm["priorities"]) + "</ol>")
     for s in llm.get("shifts", []):
         p = by_id.get(s["shift_id"], {})
         out += ['<div class="shift">', f"<h2>{h(s['title'])}</h2>",
                 f'<p class="meta">{e(CMP_WORDS.get(p.get("cmp_code"), ""))} · {e(LABEL_WORDS.get(p.get("label"), ""))}</p>',
-                f"<p>{h(s['why'])}</p>", f"<p><b>So what:</b> {h(s['so_what'])}</p>",
+                f"<p>{h(s['why'])}</p>"]
+        for k, label in (("diagnosis", "What is wrong"), ("action", "What to do"), ("impact", "What it is worth")):
+            if s.get(k):
+                out.append(f"<p><b>{label}:</b> {h(s[k])}</p>")
+        out += [f"<p><b>So what:</b> {h(s['so_what'])}</p>",
                 f"<p><b>Ask next:</b> {h(s['next_question'])}</p>", "</div>"]
     held = pack.get("held_back", [])
     if held:

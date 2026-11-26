@@ -20,6 +20,8 @@ CREATE OR REPLACE AGENT SR_DB.SEM.SHARE_RADAR_AGENT
       For any question about why share changed, call get_share_bridge first, then check_artefact.
       For who gained or lost the share, call share_flow. For lever scenarios, call what_if and repeat its assumption.
       For what changed this week, call latest_brief.
+      For which cities or regions drove a change, call city_breakdown. For multi-year history, call yearly_trend.
+      Markets: All India (total) > North, South, East, West regions > twelve cities. Region and city names are markets.
       For any other number use share_analyst. For definitions or method use method_search.
       Never calculate, round or estimate numbers yourself; quote them exactly as tools return them.
       If a tool returns an error or nothing, say so. Never fill the gap. If it returns AMBIGUOUS, ask which of the candidates the user means.
@@ -34,6 +36,7 @@ CREATE OR REPLACE AGENT SR_DB.SEM.SHARE_RADAR_AGENT
       - question: "Who took the share <brand> lost in <market>?"
       - question: "Is the <brand> drop real or a data effect?"
       - question: "What if <brand> restored distribution to last year's level?"
+      - question: "Which cities drove the <brand> loss in the last 4 weeks?"
   tools:
     - tool_spec:
         type: "cortex_analyst_text_to_sql"
@@ -97,6 +100,28 @@ CREATE OR REPLACE AGENT SR_DB.SEM.SHARE_RADAR_AGENT
           properties:
             p_scope: {type: "string", description: "Scope key, or empty for the default scope"}
           required: ["p_scope"]
+    - tool_spec:
+        type: "generic"
+        name: "city_breakdown"
+        description: "Share change of a brand in every city (optionally one region), ordered from largest loss to largest gain, with state and coordinates, plus the region totals"
+        input_schema:
+          type: "object"
+          properties:
+            p_brand: {type: "string", description: "Brand name"}
+            p_region: {type: "string", description: "North, South, East or West; empty for all cities"}
+            p_cmp_code: {type: "string", description: "Comparison code; default L4W_VS_YA"}
+          required: ["p_brand", "p_region", "p_cmp_code"]
+    - tool_spec:
+        type: "generic"
+        name: "yearly_trend"
+        description: "Value share by calendar year (about six years) for one brand in one market, city or region"
+        input_schema:
+          type: "object"
+          properties:
+            p_brand: {type: "string", description: "Brand name"}
+            p_market: {type: "string", description: "Market, region or city name"}
+            p_category: {type: "string", description: "Category, or empty for the default category"}
+          required: ["p_brand", "p_market", "p_category"]
   tool_resources:
     share_analyst:
       semantic_view: "SR_DB.SEM.SV_SHARE"
@@ -123,6 +148,14 @@ CREATE OR REPLACE AGENT SR_DB.SEM.SHARE_RADAR_AGENT
     latest_brief:
       type: "procedure"
       identifier: "SR_DB.APP.TOOL_LATEST_BRIEF"
+      execution_environment: {type: "warehouse", warehouse: "SR_WH_XS"}
+    city_breakdown:
+      type: "procedure"
+      identifier: "SR_DB.APP.TOOL_CITY_SHARE"
+      execution_environment: {type: "warehouse", warehouse: "SR_WH_XS"}
+    yearly_trend:
+      type: "procedure"
+      identifier: "SR_DB.APP.TOOL_YEARLY_TREND"
       execution_environment: {type: "warehouse", warehouse: "SR_WH_XS"}
   $$;
 

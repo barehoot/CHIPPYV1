@@ -30,13 +30,20 @@ CREATE OR REPLACE SEMANTIC VIEW SR_DB.SEM.SV_SHARE
     grid.period_code         AS PERIOD_CODE  WITH SYNONYMS = ('period') COMMENT = 'L4W, P4W, L4W_YA, L12W, L12W_YA, L52W, L52W_YA',
     grid.as_of_week          AS AS_OF_WEEK   COMMENT = 'Latest week in the data',
     grid.market_name         AS MARKET_NAME  WITH SYNONYMS = ('market', 'retailer', 'channel', 'account'),
-    grid.market_level        AS MARKET_LEVEL COMMENT = 'TOTAL, CHANNEL, RETAILER or REGION',
+    grid.market_level        AS MARKET_LEVEL COMMENT = 'TOTAL, CHANNEL, RETAILER (a region in the demo data) or CITY',
+    grid.region              AS REGION       WITH SYNONYMS = ('zone') COMMENT = 'North, South, East or West',
+    grid.city                AS CITY         WITH SYNONYMS = ('town', 'metro') COMMENT = 'City market; NULL for regions and the total',
+    grid.state               AS STATE        WITH SYNONYMS = ('province') COMMENT = 'Indian state of a city market',
     grid.category            AS CATEGORY,
     grid.manufacturer        AS MANUFACTURER WITH SYNONYMS = ('company', 'supplier', 'client'),
     grid.brand               AS BRAND,
     chg.cmp_code             AS CMP_CODE     WITH SYNONYMS = ('comparison', 'versus year ago', 'versus prior period')
                              COMMENT = 'L4W_VS_YA, L4W_VS_PP, L12W_VS_YA, L52W_VS_YA',
     chg.change_market        AS MARKET_NAME,
+    chg.change_market_level  AS MARKET_LEVEL,
+    chg.change_region        AS REGION,
+    chg.change_city          AS CITY,
+    chg.change_state         AS STATE,
     chg.change_category      AS CATEGORY,
     chg.change_manufacturer  AS MANUFACTURER,
     chg.change_brand         AS BRAND,
@@ -53,4 +60,4 @@ CREATE OR REPLACE SEMANTIC VIEW SR_DB.SEM.SV_SHARE
     chg.total_value_at_stake    AS SUM(chg.value_at_stake)
   )
   COMMENT = 'Share Radar governed share metrics'
-  AI_SQL_GENERATION 'Always filter grid to one PERIOD_CODE and chg to one CMP_CODE. Share metrics are valid only within one market and category, so group by MARKET_NAME and CATEGORY whenever more than one is requested. Never sum or average shares across markets. Show shares with one decimal and share changes with two.';
+  AI_SQL_GENERATION 'Always filter grid to one PERIOD_CODE and chg to one CMP_CODE. Share metrics are valid only within one market and category, so group by MARKET_NAME and CATEGORY whenever more than one is requested. Never sum or average shares across markets. Cities roll up to regions (MARKET_LEVEL RETAILER) and regions to All India (TOTAL); to compare cities, filter MARKET_LEVEL = ''CITY''. Show shares with one decimal and share changes with two.';

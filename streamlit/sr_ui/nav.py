@@ -1060,6 +1060,52 @@ def header(title: str, icon: str | None = None, subtitle: str | None = None) -> 
 
 # ---- Sidebar ----------------------------------------------------------------------------------------------------
 
+def filter_panel() -> None:
+    """Sidebar filters that drive Radar, Shift Detail (incl. the Brand explorer and Insight Studio), the Intelligence
+    brief and the share report. Widgets edit a draft; 'Run analysis' applies it (data.filters() reads the applied
+    sr_f_* keys, defaulting to the configured scope), so one click recomputes every page from SQL."""
+    from sr_ui import data, format as fmt
+    ss = st.session_state
+    f = data.filters()
+    tree, mkts, weeks = data.product_tree(), data.market_tree(), data.filter_weeks()
+    st.markdown('<p class="sr-side-label">Filters</p>', unsafe_allow_html=True)
+    with st.form("sr_filter_form", border=False):
+        wk_opts = weeks or [f.as_of]
+        week = st.selectbox("As-of week", wk_opts, index=wk_opts.index(f.as_of) if f.as_of in wk_opts else 0,
+                            help="Analyse the data as it stood at the end of this week (back to 2020).")
+        cats = sorted(tree.CATEGORY.unique())
+        cat = st.selectbox("Category", cats, index=cats.index(f.category) if f.category in cats else 0)
+        mfrs = ["All companies"] + sorted(tree[tree.CATEGORY == cat].MANUFACTURER.unique())
+        mfr = st.selectbox("Company", mfrs, format_func=lambda m: m if m == "All companies" else fmt.name(m, "MANUFACTURER"),
+                           index=mfrs.index(f.manufacturer) if f.manufacturer in mfrs else 0)
+        sub = tree[(tree.CATEGORY == cat) & ((mfr == "All companies") | (tree.MANUFACTURER == mfr))]
+        brands = ["All brands"] + sorted(sub.BRAND.unique())
+        brand = st.selectbox("Brand", brands, format_func=lambda b: b if b == "All brands" else fmt.name(b),
+                             index=brands.index(f.brand) if f.brand in brands else 0)
+        labels = {r.MARKET_ID: ("" if r.MARKET_LEVEL == "TOTAL" else "· " if r.MARKET_LEVEL != "CITY" else "· · ")
+                  + str(r.MARKET_NAME) for r in mkts.itertuples()}
+        ids = list(labels)
+        market = st.selectbox("Market", ids, format_func=labels.get,
+                              index=ids.index(f.market_id) if f.market_id in ids else 0,
+                              help="All India splits into regions; a region splits into its cities.")
+        period = st.select_slider("Period (weeks)", data.PERIODS, value=f.weeks if f.weeks in data.PERIODS else 4)
+        go = st.form_submit_button("Run analysis", icon=":material/play_arrow:", type="primary", width="stretch")
+    if go:
+        ss["sr_f_week"], ss["sr_f_cat"] = week, cat
+        ss["sr_f_mfr"] = "" if mfr == "All companies" else mfr
+        ss["sr_f_brand"] = None if brand == "All brands" else brand
+        ss["sr_f_market"], ss["sr_f_period"] = market, period
+        st.rerun()
+    if data.filters_active():
+        run = data.run_for_week(f.as_of)
+        st.caption(("Stored radar run for this week." if run else
+                    "No stored radar run for this week: Radar shows the nearest run; analysis pages use this week.")
+                   + f" · {labels.get(f.market_id, f.market_id)} · {f.weeks} weeks")
+        if st.button("Reset filters", icon=":material/restart_alt:", key="sr_btn_filters_reset", width="stretch"):
+            data.reset_filters()
+            st.rerun()
+
+
 def _rows(pairs: Sequence[tuple[str, object]]) -> str:
     return "".join(f'<div class="sr-side-row"><span class="k">{escape(k)}</span><span class="v">{escape(str(v))}</span></div>'
                    for k, v in pairs)
@@ -1077,11 +1123,14 @@ def sidebar() -> None:
              ("Focus", fmt.name(data.cfg("FOCUS_MANUFACTURER"), "MANUFACTURER"))]
     if data.cfg("DISPLAY_ALIAS") is True:
         sb.markdown(badge("Names masked", "accent"), unsafe_allow_html=True)
-    tip = "Scope · " + " · ".join(f"{k}: {v}" for k, v in scope)
-    sb.markdown(f'<div class="sr-scope" tabindex="0" role="group" aria-label="{escape(tip)}" title="{escape(tip)}">'
-                '<span class="sr-ico" aria-hidden="true">tune</span><div class="sr-scope-body"><details open>'
-                '<summary class="sr-side-label">Current scope</summary>' + _rows(scope) + "</details></div></div>",
-                unsafe_allow_html=True)
+    if hasattr(data, "filters") and hasattr(data, "product_tree"):
+        guarded("Filters", filter_panel, container=sb)
+    else:                                                     # data modules without filters (tests): the scope text
+        tip = "Scope · " + " · ".join(f"{k}: {v}" for k, v in scope)
+        sb.markdown(f'<div class="sr-scope" tabindex="0" role="group" aria-label="{escape(tip)}" title="{escape(tip)}">'
+                    '<span class="sr-ico" aria-hidden="true">tune</span><div class="sr-scope-body"><details open>'
+                    '<summary class="sr-side-label">Current scope</summary>' + _rows(scope) + "</details></div></div>",
+                    unsafe_allow_html=True)
     sb.markdown('<div class="sr-side-foot"></div>', unsafe_allow_html=True)
     viewer = data.viewer_name() or "Viewer unknown"
     if st.session_state.get("chippy_page") == "Radar":

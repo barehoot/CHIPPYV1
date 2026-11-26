@@ -39,7 +39,7 @@ USING (
     ('EW_DIST_DROP',         '-0.05', 'Early warning: latest-week distribution share vs L4W'),
     ('EW_PRICE_RISE',        '0.03',  'Early warning: latest-week price index vs L4W'),
     ('LLM_MODEL',            '"claude-sonnet-4-5"', 'Confirm availability in the smoke test'),
-    ('LLM_FALLBACK_MODEL',   '"mistral-large2"',    'Used after one failure'),
+    ('LLM_FALLBACK_MODEL',   '"llama3.3-70b"',      'Used after one failure (mistral-large2 is retired)'),
     ('NOTIFY_EMAILS',        '["brief-recipient@example.com"]', 'Verified Snowflake user emails only'),
     ('TEAMS_ENABLED',        'false', 'Stretch: Teams webhook'),
     ('DISPLAY_ALIAS',        'false', 'Mask manufacturer and brand names in UI and briefs'),

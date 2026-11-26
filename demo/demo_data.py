@@ -3,7 +3,12 @@
 It replaces sr_ui.data (the only module that talks to Snowflake) with the sample data the project's UI tests use
 (python/tests/test_ui_pages.py), extended so each sample shift has its own bridge, trend, flow and data checks.
 Nothing here is real company data. Used only by demo_chippy.py and demo_chippy_admin.py.
+
+Live mode (CHIPPY_MODE=live): sr_ui.data is left in place and reads Snowflake through a local Snowpark session made
+from a connection in ~/.snowflake/config.toml (CHIPPY_CONNECTION, else the default connection). Ask Chippy then calls
+the Cortex agents. Optional: CHIPPY_ROLE, CHIPPY_WAREHOUSE. No credentials are read or stored here.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -75,6 +80,43 @@ _fake.flow, _fake.artefacts = _flow, _artefacts
 
 
 PREVIEW_NOTE = "Local preview · sample data · no Snowflake connection"
+LIVE_NOTE = "Local app · live Snowflake data · Cortex agents"
+
+
+def live() -> bool:
+    return os.environ.get("CHIPPY_MODE", "").strip().lower() == "live"
+
+
+def _live_session():
+    """One Snowpark session per process; sr_ui.data.session() finds it through get_active_session()."""
+    from snowflake.snowpark import Session
+    from snowflake.snowpark.context import get_active_session
+
+    try:
+        return get_active_session()
+    except Exception:
+        pass
+    options = {}
+    if os.environ.get("CHIPPY_CONNECTION"):
+        options["connection_name"] = os.environ["CHIPPY_CONNECTION"]
+    session = Session.builder.configs(options).create() if options else Session.builder.getOrCreate()
+    if os.environ.get("CHIPPY_ROLE"):
+        session.use_role(os.environ["CHIPPY_ROLE"])
+    session.use_warehouse(os.environ.get("CHIPPY_WAREHOUSE", "SR_WH_XS"))
+    return session
+
+
+def _install_live() -> None:
+    import streamlit as st
+
+    try:
+        _live_session()
+    except Exception as e:                    # no silent fallback to sample data: say what failed and stop
+        st.error("CHIPPY live mode could not connect to Snowflake. Check CHIPPY_CONNECTION (a connection name in "
+                 f"~/.snowflake/config.toml) and CHIPPY_ROLE. Details: {e}")
+        st.stop()
+    from sr_ui import data
+    data.AI_UNAVAILABLE_REASON = None
 
 
 def _no_live_ai(*args, **kwargs):
@@ -83,7 +125,10 @@ def _no_live_ai(*args, **kwargs):
 
 def install() -> None:
     """Make every page read the sample data instead of Snowflake. The AI agent is not simulated: questions are refused
-    with a clear notice, so no sample answer can be mistaken for a real one."""
+    with a clear notice, so no sample answer can be mistaken for a real one. In live mode, nothing is replaced."""
+    if live():
+        _install_live()
+        return
     _fake.ask_agent = _no_live_ai
     _fake.AI_UNAVAILABLE_REASON = ("Live AI is unavailable in the local preview: no Snowflake session is connected, "
                                    "so Chippy cannot answer here.")
@@ -102,7 +147,8 @@ def install() -> None:
 def badge() -> None:
     """A small fixed label on every page, so the local preview is never mistaken for the live app."""
     import streamlit as st
+    note = LIVE_NOTE if live() else PREVIEW_NOTE
     st.html('<style>[data-testid="stElementContainer"]:has(.sr-demo-badge){position:absolute;height:0;margin:0}</style>'
             '<div class="sr-demo-badge" style="position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:1000001;'
             'background:#fbefdf;color:#173f43;border:1px solid #c6a879;border-radius:999px;padding:3px 12px;'
-            f'font:600 12px Inter,system-ui,sans-serif">{PREVIEW_NOTE}</div>')
+            f'font:600 12px Inter,system-ui,sans-serif">{note}</div>')

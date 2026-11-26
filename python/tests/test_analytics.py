@@ -110,6 +110,11 @@ def test_evidence_score_reads_stored_and_model_checks():
     ("Compare value sales by retailer for the last 12 weeks vs year ago", agent_router.ANALYST),
     ("Top 5 manufacturers by unit sales", agent_router.ANALYST),
     ("hello", agent_router.CHIPPY),
+    ("Which cities drove Brand C's loss?", agent_router.GEO),
+    ("How does Brand C win back its share in South Retail?", agent_router.RECOVERY),
+    ("Is Brand C priced too high in All India?", agent_router.PRICE),
+    ("What are the biggest risks for Brand C next month?", agent_router.RISK),
+    ("How does Manufacturer 3 compare with its competitors?", agent_router.COMPETITOR),
 ])
 def test_auto_routes_each_question(question, agent):
     got, why = agent_router.route(question)
@@ -119,7 +124,7 @@ def test_auto_routes_each_question(question, agent):
 def test_auto_ties_go_to_chippy_and_only_allowed_agents():
     from sr_ui import data
     assert agent_router.route("")[0] == agent_router.CHIPPY == data.AGENT
-    assert {agent_router.CHIPPY, agent_router.ANALYST} == set(data.AGENTS)     # the rule can only pick allowed agents
+    assert set(agent_router.ORDER) == set(data.AGENTS)     # the rule can only pick allowed agents, and can pick each
 
 
 # ---- SR-065 round 2: emerging shifts, share report, simulator, price ladder, the Intelligence brief lock -----------
