@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Windows/no-bash twin of scripts/deploy_all.sh: same L2 order, through the Snowflake Python connector.
 
-  python scripts/deploy_local.py --connection <name> [--from <file>] [--skip-apps]
+  python scripts/deploy_local.py --connection <name> [--from <file>] [--skip-apps] [--with-data]
+
+--with-data first rebuilds the synthetic source (scripts/synthetic_weekly_facts.sql: 330 weeks from 2020-08-01,
+All India > 4 regions > 12 cities with coordinates), then deploys every object on top of it.
 
 Uses a connection from ~/.snowflake/config.toml (no secrets in this file) and caches the MFA token, so one
 approval covers the whole deploy. Files marked organizer may fail; they are reported and the deploy carries on.
@@ -25,21 +28,26 @@ APPS = [  # (object, main file, owner role, title)
 APP_FILES = ["environment.yml", "pyproject.toml", ".streamlit/config.toml", "pages/*.py", "sr_ui/*.py"]
 
 
-def plan() -> list[tuple[str, str]]:
+def plan(with_data: bool = False) -> list[tuple[str, str]]:
     """(step, kind) in deploy_all.sh order. kind: '' required, 'organizer' optional, or a built-in step."""
     s = [("sql/00_setup/001_roles_wh_db.sql", "organizer"), ("sql/00_setup/002_settings.sql", ""),
          ("sql/00_setup/003_ops_tables.sql", ""), ("tests/sql/000_fixtures.sql", "")]
+    if with_data:
+        s.append(("scripts/synthetic_weekly_facts.sql", ""))
     s += [(str(p.relative_to(ROOT)).replace("\\", "/"), "") for d in ("sql/10_src", "sql/20_core")
           for p in sorted((ROOT / d).glob("*.sql"))]
     s += [("sql/40_app/401_result_tables.sql", ""), ("sr_lib", "put_sr_lib")]
     s += [(f"sql/30_ml/{p.name}", "") for p in sorted((ROOT / "sql/30_ml").glob("*.sql"))]
     s += [(f"sql/40_app/{p.name}", "") for p in sorted((ROOT / "sql/40_app").glob("*.sql"))
           if not p.name.startswith("401_")]
-    s += [("sql/50_sem/501_v_sem_views.sql", ""), ("sql/50_sem/502_sv_share.sql", ""),
+    s += [("sql/50_sem/501_v_sem_views.sql", ""), ("sql/50_sem/501b_v_tool_specialists.sql", ""),
+          ("sql/50_sem/502_sv_share.sql", ""),
           ("sql/50_sem/503_kb_and_search.sql", ""), ("kb", "load_kb"), ("sql/50_sem/504_agent.sql", ""),
           ("sql/50_sem/505_cowork.sql", "organizer"), ("sql/50_sem/506_analyst_agent.sql", ""),
+          ("sql/50_sem/507_geo_agent.sql", ""), ("sql/50_sem/508_specialist_agents.sql", ""),
           ("sql/70_sec/701_grants.sql", "organizer"),
           ("sql/70_sec/704_app_agent.sql", ""), ("sql/70_sec/705_analyst_agent.sql", ""),
+          ("sql/70_sec/706_geo_agent.sql", ""), ("sql/70_sec/707_specialist_agents.sql", ""),
           ("sql/60_ops/601_stream_task.sql", ""), ("sql/60_ops/602_replay.sql", ""),
           ("sql/60_ops/603_notifications.sql", "organizer"), ("sql/60_ops/604_alert.sql", ""),
           ("sql/60_ops/606_observability.sql", ""), ("sql/70_sec/702_row_access.sql", ""),
@@ -107,11 +115,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--connection", default="sr")
     ap.add_argument("--from", dest="start", help="resume at this step (file path or step name)")
     ap.add_argument("--skip-apps", action="store_true")
+    ap.add_argument("--with-data", action="store_true", help="rebuild the 5-year synthetic source data first")
     args = ap.parse_args(argv)
     conn = snowflake.connector.connect(connection_name=args.connection, client_request_mfa_token=True,
                                        client_store_temporary_credential=True)
     conn.cursor().execute("USE WAREHOUSE SR_WH_XS")
-    steps, failed, started = plan(), [], args.start is None
+    steps, failed, started = plan(args.with_data), [], args.start is None
     for step, kind in steps:
         started = started or step == args.start
         if not started or (kind == "apps" and args.skip_apps):

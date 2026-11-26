@@ -6,6 +6,7 @@
 #
 # Usage: scripts/deploy_all.sh            (connection "sr", or set SR_CONNECTION)
 #        SKIP_APPS=1 scripts/deploy_all.sh  (SQL only)
+#        WITH_DATA=1 scripts/deploy_all.sh  (first rebuild the 5-year synthetic source: 2020-08 onwards, 12 cities)
 # Files marked "organizer" need privileges the team may not have (CREATE INTEGRATION, ALTER on the CoWork
 # object, ACCOUNTADMIN grants). Their failure is reported and the deploy carries on; hand them to the organizers.
 set -euo pipefail
@@ -49,6 +50,7 @@ run_sql sql/00_setup/001_roles_wh_db.sql organizer
 run_sql sql/00_setup/002_settings.sql
 run_sql sql/00_setup/003_ops_tables.sql
 run_sql tests/sql/000_fixtures.sql
+[[ -n "${WITH_DATA:-}" ]] && run_sql scripts/synthetic_weekly_facts.sql
 
 # 10_src, 20_core
 for f in sql/10_src/*.sql sql/20_core/*.sql; do run_sql "$f"; done
@@ -63,17 +65,22 @@ for f in sql/40_app/*.sql; do [[ "$f" == */401_* ]] || run_sql "$f"; done
 
 # 50_sem, with the knowledge base loaded before the agent
 run_sql sql/50_sem/501_v_sem_views.sql
+run_sql sql/50_sem/501b_v_tool_specialists.sql
 run_sql sql/50_sem/502_sv_share.sql
 run_sql sql/50_sem/503_kb_and_search.sql
 python3 scripts/load_kb.py --connection "$CONN"
 run_sql sql/50_sem/504_agent.sql
 run_sql sql/50_sem/505_cowork.sql organizer
 run_sql sql/50_sem/506_analyst_agent.sql
+run_sql sql/50_sem/507_geo_agent.sql
+run_sql sql/50_sem/508_specialist_agents.sql
 
 # Grants before 60_ops (B11): SR_APP creates the stream, tasks and alert there; 606 grants to SR_UI
 run_sql sql/70_sec/701_grants.sql organizer
 run_sql sql/70_sec/704_app_agent.sql
 run_sql sql/70_sec/705_analyst_agent.sql
+run_sql sql/70_sec/706_geo_agent.sql
+run_sql sql/70_sec/707_specialist_agents.sql
 
 # 60_ops (stream, tasks and alert as SR_APP)
 run_sql sql/60_ops/601_stream_task.sql
