@@ -1,0 +1,54 @@
+# streamlit/.streamlit/config.toml: Deep Teal & Mist theme, shared by CHIPPY and CHIPPY_ADMIN.
+#   rich teal #1E5556 · deep teal #173F43 · mist #F5F8F8 · sea glass #A6C1BD · slate #647C80
+#   pale teal #DCEBE8 · muted gold #C6A879 · terracotta #C87970 · white #FFFFFF
+# Status uses the palette too: OK rich teal, warning muted gold, failed terracotta (always with text and a symbol).
+# Mirrored in sr_ui/nav.py (TOKENS) and sr_ui/charts.py. Fonts: Inter for the interface, Manrope for headings and KPI
+# figures (fallback stacks in nav.CSS, in case the font host is not reachable).
+[theme]
+base = "light"
+primaryColor = "#1E5556"              # rich teal: primary buttons, selected states, focus, progress
+backgroundColor = "#F5F8F8"           # mist page
+secondaryBackgroundColor = "#DCEBE8"  # pale teal: widget backgrounds, code
+textColor = "#173F43"                 # deep teal
+linkColor = "#1E5556"
+linkUnderline = false
+borderColor = "#A6C1BD"               # sea glass hairlines
+dataframeBorderColor = "#DCEBE8"
+dataframeHeaderBackgroundColor = "#DCEBE8"
+codeBackgroundColor = "#F5F8F8"
+showWidgetBorder = true
+baseRadius = "12px"
+buttonRadius = "8px"
+baseFontSize = 14
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+headingFont = "Manrope:https://fonts.googleapis.com/css2?family=Manrope:wght@600;700&display=swap"
+# Status tones: alerts, st.badge and coloured markdown use these
+greenColor = "#1E5556"
+greenBackgroundColor = "#DCEBE8"
+greenTextColor = "#1E5556"
+orangeColor = "#C6A879"
+orangeBackgroundColor = "#F7F2EB"   # muted gold 15% on white
+orangeTextColor = "#173F43"
+yellowColor = "#C6A879"
+yellowBackgroundColor = "#F7F2EB"
+yellowTextColor = "#173F43"
+redColor = "#C87970"
+redBackgroundColor = "#F8EFEE"      # terracotta 12% on white
+redTextColor = "#173F43"
+blueColor = "#1E5556"                 # st.info: pale teal, deep-teal text
+blueBackgroundColor = "#DCEBE8"
+blueTextColor = "#173F43"
+violetColor = "#647C80"
+violetBackgroundColor = "#F5F8F8"
+violetTextColor = "#173F43"
+grayColor = "#647C80"
+grayBackgroundColor = "#F5F8F8"
+grayTextColor = "#647C80"
+
+[theme.sidebar]
+backgroundColor = "#173F43"           # deep teal
+secondaryBackgroundColor = "#1E5556"  # rich teal: sidebar inputs
+textColor = "#FFFFFF"
+primaryColor = "#DCEBE8"              # pale teal
+linkColor = "#DCEBE8"
+borderColor = "#1E5556"

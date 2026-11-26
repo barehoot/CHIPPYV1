@@ -1,0 +1,8 @@
+# Packages for running the CHIPPY demo locally (Python 3.11 to 3.13).
+# Streamlit is pinned to the version the apps use inside Snowflake.
+streamlit==1.51.0
+altair==5.5.0
+pandas>=2.2,<3
+numpy>=1.26
+statsmodels>=0.14      # Shift Detail: Future Trends and Statistical Evidence
+pytest>=8              # needed: the demo's sample data comes from the UI tests

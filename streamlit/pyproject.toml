@@ -1,0 +1,13 @@
+# streamlit/pyproject.toml: container runtime dependencies (environment.yml is the warehouse-runtime twin)
+[project]
+name = "chippy"
+version = "0.1.0"
+requires-python = "==3.11.*"
+dependencies = [
+    "streamlit>=1.51.0",
+    "snowflake-snowpark-python",
+    "pandas",
+    "altair",
+    "statsmodels",
+    "torch",
+]
