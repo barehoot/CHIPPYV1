@@ -288,6 +288,20 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
 .sr-side-row .k {{ color: {T['sea']} }}
 .sr-side-row .v {{ color: {T['white']}; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums }}
 .sr-side-row .sr-badge {{ margin: 0; padding: 1px 9px; font-size: 12px }}
+/* ---- Sidebar Filters panel ------------------------------------------------------------------------------------
+   The sidebar is deep teal with white text, but Streamlit paints the select/input control white, which leaves the
+   selected value white-on-white. Repaint the controls in rich teal so the value, the caret and the slider read. */
+[data-testid="stSidebar"] :is([data-testid="stSelectbox"], [data-testid="stTextInput"]) [data-baseweb="select"] > div,
+[data-testid="stSidebar"] :is([data-testid="stSelectbox"], [data-testid="stTextInput"]) [data-baseweb="input"] > div {{
+  background: {T['teal']} !important; border-color: rgba(255, 255, 255, 0.28) !important }}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] [data-baseweb="select"] * {{ color: {T['white']} !important }}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] svg {{ fill: {T['sea']} !important }}
+[data-testid="stSidebar"] [data-testid="stExpander"] details {{ border-color: rgba(255, 255, 255, 0.18) !important }}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {{ font-weight: 600 }}
+/* The options list renders in a body-level portal, so give it the same dark treatment. */
+[data-baseweb="popover"] [role="listbox"] {{ background: {T['deep']} !important }}
+[data-baseweb="popover"] [role="option"] {{ color: {T['white']} !important }}
+[data-baseweb="popover"] [role="option"][aria-selected="true"] {{ background: {T['teal']} !important }}
 /* ---- Chippy mascot: a small white card, the pose at 64px and a pale-teal speech bubble ------------------------- */
 [class*="st-key-sr_mascot"] {{ background: {T['card']}; border: 1px solid {T['line']} !important; border-radius: {RADIUS};
   box-shadow: {SHADOW}; padding: 8px 16px 8px 10px !important; align-items: center }}
@@ -691,9 +705,15 @@ def is_admin() -> bool:
 
 def guarded(title: str, render: Callable[[], None], container=None) -> None:
     """Run one section; on failure show a short message and a retry button, never a stack trace (L13).
-    The admin app adds the first 300 characters of the Snowflake message."""
+    The admin app adds the first 300 characters of the Snowflake message.
+    When container is given, the section renders inside it, so a section that uses bare st.* calls
+    (filter_panel) lands in the sidebar instead of the page body."""
     try:
-        render()
+        if container is not None:
+            with container:
+                render()
+        else:
+            render()
     except Exception as e:                                    # noqa: BLE001 - every section fails soft
         box = container or st
         box.warning(f"Couldn't load {title.lower()}.")
@@ -1064,6 +1084,56 @@ def header(title: str, icon: str | None = None, subtitle: str | None = None) -> 
 
 # ---- Sidebar ----------------------------------------------------------------------------------------------------
 
+def filter_panel() -> None:
+    """Sidebar filters that drive Radar, Shift Detail (incl. the Brand explorer and Insight Studio), the Intelligence
+    brief and the share report. Collapsed by default and labelled with the applied scope, so the side menu stays a
+    menu; opening it shows the widgets. Widgets edit a draft; 'Run analysis' applies it (data.filters() reads the
+    applied sr_f_* keys, defaulting to the configured scope), so one click recomputes every page from SQL."""
+    from sr_ui import data, format as fmt
+    ss = st.session_state
+    f = data.filters()
+    tree, mkts, weeks = data.product_tree(), data.market_tree(), data.filter_weeks()
+    labels = {r.MARKET_ID: ("" if r.MARKET_LEVEL == "TOTAL" else "· " if r.MARKET_LEVEL != "CITY" else "· · ")
+              + str(r.MARKET_NAME) for r in mkts.itertuples()}
+    market_name = str(labels.get(f.market_id, f.market_id)).lstrip("· ")
+    summary = " · ".join([str(f.category), market_name, f"{f.weeks}w"])
+    with st.expander(f"Filters · {summary}", expanded=bool(ss.pop("sr_filters_open", False)),
+                     icon=":material/tune:"):
+        with st.form("sr_filter_form", border=False):
+            wk_opts = weeks or [f.as_of]
+            week = st.selectbox("As-of week", wk_opts, index=wk_opts.index(f.as_of) if f.as_of in wk_opts else 0,
+                                help="Analyse the data as it stood at the end of this week (back to 2020).")
+            cats = sorted(tree.CATEGORY.unique())
+            cat = st.selectbox("Category", cats, index=cats.index(f.category) if f.category in cats else 0)
+            mfrs = ["All companies"] + sorted(tree[tree.CATEGORY == cat].MANUFACTURER.unique())
+            mfr = st.selectbox("Company", mfrs,
+                               format_func=lambda m: m if m == "All companies" else fmt.name(m, "MANUFACTURER"),
+                               index=mfrs.index(f.manufacturer) if f.manufacturer in mfrs else 0)
+            sub = tree[(tree.CATEGORY == cat) & ((mfr == "All companies") | (tree.MANUFACTURER == mfr))]
+            brands = ["All brands"] + sorted(sub.BRAND.unique())
+            brand = st.selectbox("Brand", brands, format_func=lambda b: b if b == "All brands" else fmt.name(b),
+                                 index=brands.index(f.brand) if f.brand in brands else 0)
+            ids = list(labels)
+            market = st.selectbox("Market", ids, format_func=labels.get,
+                                  index=ids.index(f.market_id) if f.market_id in ids else 0,
+                                  help="All India splits into regions; a region splits into its cities.")
+            period = st.select_slider("Period (weeks)", data.PERIODS, value=f.weeks if f.weeks in data.PERIODS else 4)
+            go = st.form_submit_button("Run analysis", icon=":material/play_arrow:", type="primary", width="stretch")
+        if go:
+            ss["sr_f_week"], ss["sr_f_cat"] = week, cat
+            ss["sr_f_mfr"] = "" if mfr == "All companies" else mfr
+            ss["sr_f_brand"] = None if brand == "All brands" else brand
+            ss["sr_f_market"], ss["sr_f_period"] = market, period
+            st.rerun()
+        if data.filters_active():
+            run = data.run_for_week(f.as_of)
+            st.caption("Stored radar run for this week." if run else
+                       "No stored radar run for this week: Radar shows the nearest run; analysis pages use this week.")
+            if st.button("Reset filters", icon=":material/restart_alt:", key="sr_btn_filters_reset", width="stretch"):
+                data.reset_filters()
+                st.rerun()
+
+
 def _rows(pairs: Sequence[tuple[str, object]]) -> str:
     return "".join(f'<div class="sr-side-row"><span class="k">{escape(k)}</span><span class="v">{escape(str(v))}</span></div>'
                    for k, v in pairs)
@@ -1081,11 +1151,14 @@ def sidebar() -> None:
              ("Focus", fmt.name(data.cfg("FOCUS_MANUFACTURER"), "MANUFACTURER"))]
     if data.cfg("DISPLAY_ALIAS") is True:
         sb.markdown(badge("Names masked", "accent"), unsafe_allow_html=True)
-    tip = "Scope · " + " · ".join(f"{k}: {v}" for k, v in scope)
-    sb.markdown(f'<div class="sr-scope" tabindex="0" role="group" aria-label="{escape(tip)}" title="{escape(tip)}">'
-                '<span class="sr-ico" aria-hidden="true">tune</span><div class="sr-scope-body"><details open>'
-                '<summary class="sr-side-label">Current scope</summary>' + _rows(scope) + "</details></div></div>",
-                unsafe_allow_html=True)
+    if hasattr(data, "filters") and hasattr(data, "product_tree"):
+        guarded("Filters", filter_panel, container=sb)
+    else:                                                     # data modules without filters (tests): the scope text
+        tip = "Scope · " + " · ".join(f"{k}: {v}" for k, v in scope)
+        sb.markdown(f'<div class="sr-scope" tabindex="0" role="group" aria-label="{escape(tip)}" title="{escape(tip)}">'
+                    '<span class="sr-ico" aria-hidden="true">tune</span><div class="sr-scope-body"><details open>'
+                    '<summary class="sr-side-label">Current scope</summary>' + _rows(scope) + "</details></div></div>",
+                    unsafe_allow_html=True)
     sb.markdown('<div class="sr-side-foot"></div>', unsafe_allow_html=True)
     viewer = data.viewer_name() or "Viewer unknown"
     if st.session_state.get("chippy_page") == "Radar":

@@ -33,11 +33,24 @@ def page_header() -> None:
 
 page_header()
 run = data.current_run()
+options = data.shifts(run.run_id) if run is not None else pd.DataFrame()
+_has_explorer = hasattr(data, "brand_snapshot")
+if _has_explorer:
+    with st.container(key="sr_sd_mode"):
+        mode = st.radio("Mode", ["Ranked shifts", "Brand explorer"], horizontal=True, key="sr_sd_mode_pick",
+                        label_visibility="collapsed",
+                        index=1 if options.empty else 0,
+                        help="Ranked shifts: the run's findings. Brand explorer: any company, brand, market and week "
+                             "from the sidebar filters, back to 2020.")
+    if mode == "Brand explorer" or options.empty:
+        if options.empty:
+            st.caption("No ranked shift matches the sidebar filters for this week, so the Brand explorer is shown.")
+        from sr_ui import explorer
+        nav.guarded("Brand explorer", explorer.render)
+        nav.stop()
 if run is None:
     nav.mascot("sleepy", "Hmm, my basket is empty!", "No run yet.", key="empty_run")
     nav.stop()
-
-options = data.shifts(run.run_id)
 if options.empty:
     nav.mascot("sleepy", "Hmm, my basket is empty!", "No shifts passed the gates in the current run.", key="empty_shifts")
     nav.stop()

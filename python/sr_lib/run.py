@@ -38,32 +38,49 @@ SCHEMA = {
                         "why": {"type": "string"},
                         "so_what": {"type": "string"},
                         "next_question": {"type": "string"},
+                        "diagnosis": {"type": "string"},
+                        "action": {"type": "string"},
+                        "impact": {"type": "string"},
                     },
-                    "required": ["shift_id", "title", "why", "so_what", "next_question"],
+                    "required": ["shift_id", "title", "why", "so_what", "next_question", "diagnosis", "action",
+                                 "impact"],
                 },
             },
+            "priorities": {"type": "array", "items": {"type": "string"}},
             "watchlist": {"type": "array", "items": {"type": "string"}},
         },
-        "required": ["headline", "shifts", "watchlist"],
+        "required": ["headline", "shifts", "priorities", "watchlist"],
     },
 }
 
-PROMPT = """You write a competitive share brief for an NIQ client-service analyst.
+PROMPT = """You write a competitive share brief for an NIQ client-service analyst and the brand team who must act on it.
 Rules:
-1. Use only the facts in the FACT PACK. Refer to any number only by its placeholder, for example {{f12}}. Never write digits.
+1. Use only the facts in the FACT PACK. Refer to any number only by its placeholder, for example {{f12}}. Never write
+   digits, dates or years; the system prints the week and the period wording.
 2. Return one entry per item in "shifts", in the same order, with the same shift_id.
 3. title: one line naming the brand, the market and whether it gained or lost share.
-4. why: one or two sentences naming the largest bridge terms and the top retailer, using placeholders.
-5. so_what: one sentence on what the client should check or do next.
-6. next_question: one question the analyst could ask the Chippy agent next.
-7. headline: one sentence on the week for the focus manufacturer.
-8. watchlist: one short line per watchlist item, using placeholders.
-9. Do not describe held_back items; the system lists them.
-10. Plain business English. No hype.
+4. why: one or two sentences naming the largest bridge terms and the top retailer or region, using placeholders.
+5. diagnosis: two sentences on what is going wrong (or right) commercially: which lever broke, where it is worst, and who
+   is taking the share (the flow brands). Be specific, using names and placeholders.
+6. action: two or three concrete steps the brand team should take this week, each with the lever, the place and the
+   owner (for example sales, trade marketing, supply chain). Start each step with a verb.
+7. impact: one sentence on what the recovery is worth, using the shift's recovery placeholders when present; otherwise
+   the value at stake placeholder.
+8. so_what: one sentence for an executive: the business consequence if nothing is done.
+9. next_question: one question the analyst could ask the Chippy agent next.
+10. headline: one sentence on the week for the focus manufacturer.
+11. priorities: the three most important actions across all shifts, most valuable first, one line each.
+12. watchlist: one short line per watchlist item, using placeholders, with what to watch next week.
+13. Do not describe held_back items; the system lists them.
+14. Plain business English. No hype. A placeholder prints its own unit (for example "-3.71 pts" or "INR 1.2M"): never
+    write a unit word right after a placeholder.
+15. Value at stake and recovery value cover the compared period only: never call them annual or yearly.
+16. Do not invent quantities, store counts, channels, deadlines or causes that are not in the FACT PACK; name only the
+    levers, markets and brands it lists.
 FACT PACK:
 """
 
-LLM_OPTIONS = {"temperature": 0, "max_tokens": 1500}
+LLM_OPTIONS = {"temperature": 0, "max_tokens": 4000}
 
 
 def build_prompt(pack: dict) -> str:

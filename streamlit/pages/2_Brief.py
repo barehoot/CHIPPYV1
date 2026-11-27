@@ -38,7 +38,8 @@ if lst.empty:
     nav.stop()
 ids = list(lst.BRIEF_ID)
 default = ids.index(st.session_state.brief_id) if st.session_state.brief_id in ids else 0
-labels = {r.BRIEF_ID: f"Week ending {nav.nice_date(r.AS_OF_WEEK)}" for r in lst.itertuples(index=False)}
+labels = {r.BRIEF_ID: f"Week ending {nav.nice_date(r.AS_OF_WEEK)} · {pd.to_datetime(r.PUBLISHED_AT):%d %b %H:%M}"
+          for r in lst.itertuples(index=False)}
 
 
 def _step(delta: int) -> None:
@@ -83,12 +84,16 @@ def _parts(body: str) -> dict | None:
         why = next((p for p in paras if not p.startswith("<b>")), "")
         so = next((p[len("<b>So what:</b>"):].strip() for p in paras if p.startswith("<b>So what:</b>")), "")
         ask = next((p[len("<b>Ask next:</b>"):].strip() for p in paras if p.startswith("<b>Ask next:</b>")), "")
+        extra = {k: next((p[len(f"<b>{lab}:</b>"):].strip() for p in paras if p.startswith(f"<b>{lab}:</b>")), "")
+                 for k, lab in (("diagnosis", "What is wrong"), ("action", "What to do"), ("impact", "What it is worth"))}
         shifts.append({"title": title.group(1) if title else "", "meta": meta.group(1) if meta else "",
-                       "why": why, "so_what": so, "ask": ask})
+                       "why": why, "so_what": so, "ask": ask, **extra})
     held = re.search(r"<h2>Held back for data checks</h2><ul>(.*?)</ul>", body, re.S)
     watch = re.search(r"<h2>Watchlist</h2><ul>(.*?)</ul>", body, re.S)
+    prio = re.search(r"<h2>This week's priorities</h2><ol>(.*?)</ol>", body, re.S)
     items = lambda m: re.findall(r"<li>(.*?)</li>", m.group(1), re.S) if m else []          # noqa: E731
-    return {"headline": head.group(1), "meta": head.group(2), "shifts": shifts, "held": items(held), "watch": items(watch)}
+    return {"headline": head.group(1), "meta": head.group(2), "shifts": shifts, "held": items(held), "watch": items(watch),
+            "priorities": items(prio)}
 
 
 def _plain(html: str) -> str:
@@ -150,7 +155,10 @@ def report() -> None:
     chips += [f"{len(parts['held'])} held back", f"{len(parts['watch'])} early warning{'' if len(parts['watch']) == 1 else 's'}"]
     st.html('<section class="sr-brief-summary"><span class="k">Executive summary</span>'
             f'<h2>{_signed(parts["headline"])}</h2><p class="meta">{parts["meta"]}</p><div class="chips">'
-            + "".join(f"<span>{escape(c)}</span>" for c in chips) + "</div></section>")
+            + "".join(f"<span>{escape(c)}</span>" for c in chips) + "</div>"
+            + ("<p class=\"meta\"><b>This week's priorities</b></p><ol>"
+               + "".join(f"<li>{_signed(p)}</li>" for p in parts["priorities"]) + "</ol>" if parts["priorities"] else "")
+            + "</section>")
 
     with st.container(key="sr_brief_cards"):
         for i, (sh, r) in enumerate(zip(parts["shifts"], rows)):
@@ -165,8 +173,11 @@ def report() -> None:
                               f'{escape(fmt.money(r.VALUE_AT_STAKE, cur))}</b> · {escape(fmt.pct(r.SH0))} → '
                               f'{escape(fmt.pct(r.SH1))} · Confidence {escape(fmt.confidence(r.CONFIDENCE))} · '
                               f'{escape(fmt.LABEL_CHIP.get(r.ARTEFACT_LABEL, r.ARTEFACT_LABEL))}')
-                rows_html = [("Finding", _signed(sh["why"])), ("Business impact", impact),
-                             ("Recommended action", _signed(sh["so_what"])), ("Ask next", _signed(sh["ask"]))]
+                rows_html = [("Finding", _signed(sh["why"])), ("What is wrong", _signed(sh["diagnosis"])),
+                             ("Business impact", impact), ("What to do", _signed(sh["action"])),
+                             ("What it is worth", _signed(sh["impact"])),
+                             ("If nothing is done" if sh["action"] else "Recommended action", _signed(sh["so_what"])),
+                             ("Ask next", _signed(sh["ask"]))]
                 st.html(f'<div class="sr-brief-card-head"><span class="sr-ico {("neg" if pts is not None and pts < 0 else "pos")}" '
                         f'aria-hidden="true">{arrow}</span><div><h3>{_signed(sh["title"])}</h3><p>{sh["meta"]}</p></div></div>'
                         '<dl class="sr-brief-rows">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows_html if v) + "</dl>")
@@ -216,14 +227,20 @@ def checks() -> None:
 # ---- Intelligence brief (SR-065): the run, Radar, Shift Detail and Insight Studio in one narrative -------------------
 
 @st.cache_data(ttl=data.TTL_S, show_spinner=False)
-def _pack(run_id: str, category: str, masked_: bool, cur_: str, markets: tuple):
+def _pack(run_id: str, category: str, masked_: bool, cur_: str, markets: tuple, fkey: str = ""):
+    """fkey (the applied sidebar filters) is only part of the cache key: the pack's panels read data.filters()."""
     from sr_ui import intel
     return intel.build_pack(run_id, category, masked_, cur_, dict(markets))
 
 
+def _category() -> str:
+    return str(data.filters().category if hasattr(data, "filters") else data.cfg("SCOPE_CATEGORY"))
+
+
 def intelligence() -> None:
     from sr_ui import intel
-    pk = _pack(b["RUN_ID"], str(data.cfg("SCOPE_CATEGORY")), masked, cur, tuple(sorted(data.market_names().items())))
+    fkey = repr(data.filters()) if hasattr(data, "filters") else ""
+    pk = _pack(b["RUN_ID"], _category(), masked, cur, tuple(sorted(data.market_names().items())), fkey)
     cache = st.session_state.setdefault("sr_intel", {})
     key = f"{bid}|{pk.key()}"
     if key not in cache:
@@ -272,15 +289,18 @@ def intelligence() -> None:
 def share_report() -> None:
     """The automated share report: every brand in the category, one market and period, ready to send."""
     from sr_ui import studio
-    cat = str(data.cfg("SCOPE_CATEGORY"))
+    cat = _category()
     retailers = sorted(studio._panel(cat, masked).RETAILER.unique())
     c1, c2, c3 = nav.stack("sr_rep_ctl").columns([1, 1.4, 1.4], vertical_alignment="bottom")
-    weeks = c1.selectbox("Period", [4, 12, 52], key="rep_weeks", format_func=lambda w: f"Last {w} weeks")
+    default_w = data.filters().weeks if hasattr(data, "filters") else 4
+    opts = sorted({4, 12, 52, default_w})
+    weeks = c1.selectbox("Period", opts, index=opts.index(default_w), key="rep_weeks",
+                         format_func=lambda w: f"Last {w} weeks")
     compare = c2.selectbox("Compared with", ["year_ago", "previous"], key="rep_cmp",
                            format_func={"year_ago": "Same weeks a year ago", "previous": "The weeks before"}.get)
-    rets = ["All retailers"] + retailers
-    where = c3.selectbox("Market", rets, key="rep_ret")
-    r = studio._shown(data.share_report(cat, int(weeks), compare, None if where == "All retailers" else where))
+    rets = ["All markets"] + retailers
+    where = c3.selectbox("Market", rets, key="rep_ret", help="The regions or cities under the sidebar's market")
+    r = studio._shown(data.share_report(cat, int(weeks), compare, None if where == "All markets" else where))
     if r.empty:
         st.info("No sales in this market and period.", icon=":material/info:")
         return

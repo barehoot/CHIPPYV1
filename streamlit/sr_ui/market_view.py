@@ -1,4 +1,5 @@
-"""Radar's Market View. Country shapes are bundled public Natural Earth geometry."""
+"""Radar's Market View. Country shapes are bundled public Natural Earth geometry; city markets with coordinates
+(APP.V_UI_CITY_SHARE) are drawn as points on top."""
 from __future__ import annotations
 
 import json
@@ -73,15 +74,39 @@ def market_feature(run: data.Run) -> dict | None:
               "POSSIBLE_DATA_EFFECT": "Possible data effect · held for checks"}
     share, prior, movement, value = (float(row[k]) if pd.notna(row[k]) else None
                                      for k in ("SH1", "SH0", "D_SHARE_PTS", "VALUE_AT_STAKE"))
+    currency = data.cfg("CURRENCY") or ""
     return {
         "id": shape["id"], "market": name, "brand": fmt.name(row.BRAND), "category": str(row.CATEGORY),
         "share": share, "value": value, "movement": movement,
         "polarity": None if movement is None else "Loss" if movement < 0 else "Gain" if movement > 0 else "No change",
         "current": fmt.pct(share), "previous": fmt.pct(prior), "change": fmt.pts(movement),
-        "stake": fmt.money(value, data.cfg("CURRENCY") or ""), "warning": early or "None recorded",
+        "stake": fmt.money(value, currency), "warning": early or "None recorded",
         "early": early is not None, "validation": status.get(row.ARTEFACT_LABEL, "Unavailable"),
         "comparison": fmt.CMP_TEXT.get(row.CMP_CODE, row.CMP_CODE),
+        "cities": city_points(row.CMP_CODE, row.CATEGORY, row.BRAND, currency),
     }
+
+
+def city_points(cmp_code: str, category: str, brand: str, currency: str) -> list[dict]:
+    """One point per city market with coordinates; empty when the source has no city level."""
+    from sr_ui import data
+
+    try:
+        cities = data.city_shares(cmp_code, category, brand)
+    except Exception:                    # older deployments without V_UI_CITY_SHARE: countries only
+        return []
+    points = []
+    for c in cities.itertuples():
+        share, prior, value = (float(v) if pd.notna(v) else None for v in (c.SH1, c.SH0, c.VALUE_AT_STAKE))
+        movement = float(c.D_SHARE) * 100 if pd.notna(c.D_SHARE) else None
+        points.append({
+            "lat": float(c.LATITUDE), "lon": float(c.LONGITUDE), "city": c.CITY, "region": c.REGION, "state": c.STATE,
+            "share": share, "value": value, "movement": movement, "size": abs(value or 0),
+            "polarity": None if movement is None else "Loss" if movement < 0 else "Gain" if movement > 0 else "No change",
+            "current": fmt.pct(share), "previous": fmt.pct(prior), "change": fmt.pts(movement),
+            "stake": fmt.money(value, currency),
+        })
+    return points
 
 
 def map_spec(feature: dict | None, mode: str, zoom: int) -> dict:
@@ -113,8 +138,9 @@ def map_spec(feature: dict | None, mode: str, zoom: int) -> dict:
         values.sort(key=lambda item: item[0] != primary)
         layers.append({
             "transform": [{"filter": {"field": "id", "equal": feature["id"]}},
-                          {"lookup": "id", "from": {"data": {"values": [feature]}, "key": "id",
-                                                   "fields": [key for key in feature if key != "id"]}}],
+                          {"lookup": "id", "from": {"data": {"values": [{k: v for k, v in feature.items() if k != "cities"}]},
+                                                   "key": "id",
+                                                   "fields": [key for key in feature if key not in ("id", "cities")]}}],
             "mark": mark,
             "encoding": {
                 "fill": {"condition": {"test": f"isValid(datum.{color['field']})", **color}, "value": UNAVAILABLE},
@@ -126,8 +152,44 @@ def map_spec(feature: dict | None, mode: str, zoom: int) -> dict:
                              ("comparison", "Comparison")]],
             },
         })
+    cities = (feature or {}).get("cities") or []
+    if cities:
+        # City circles: area shows value at stake, fill uses the same metric colours as the country layer
+        magnitude = max(abs(c["value"] or 0) for c in cities) or 1
+        if mode == "Movement":
+            dot = {"field": "polarity", "type": "nominal",
+                   "scale": {"domain": ["Loss", "No change", "Gain"], "range": [charts.LOSS, MINT, charts.GAIN]}}
+        elif mode == "Share":
+            dot = {"field": "share", "type": "quantitative", "scale": {"domain": [0, max(c["share"] or 0 for c in cities) or 1],
+                                                                          "range": [SHARE_LOW, charts.GAIN]}}
+        else:
+            dot = {"field": "value", "type": "quantitative",
+                   "scale": {"domain": [-magnitude, 0, magnitude], "range": [charts.LOSS, MINT, charts.GAIN]}}
+        dot["legend"] = None
+        values = [("current", "Current share"), ("previous", "Previous share"),
+                  ("change", "Share movement"), ("stake", "Value at stake")]
+        primary = {"Share": "current", "Movement": "change", "Value": "stake"}[mode]
+        values.sort(key=lambda item: item[0] != primary)
+        city_layer = {
+            "data": {"values": cities},
+            "mark": {"type": "circle", "stroke": "#ffffff", "strokeWidth": 1, "opacity": 0.9},
+            "encoding": {
+                "longitude": {"field": "lon", "type": "quantitative"},
+                "latitude": {"field": "lat", "type": "quantitative"},
+                "size": {"field": "size", "type": "quantitative", "legend": None,
+                         "scale": {"domain": [0, magnitude], "range": [40, 420]}},
+                "fill": {"condition": {"test": f"isValid(datum.{dot['field']})", **dot}, "value": UNAVAILABLE},
+                "tooltip": [tooltip(field, title) for field, title in
+                            [("city", "City"), ("state", "State"), ("region", "Region"), *values]],
+            },
+        }
     projection = {"type": "equalEarth"}
-    if zoom:
+    if cities:
+        # Centre on India so the city points are readable; zoom steps scale from there
+        projection = {"type": "mercator", "center": [80.5, 22.5],
+                      "scale": {"expr": f"min(width, height * 1.25) * 1.45 * {1 + .35 * zoom}"},
+                      "translate": {"expr": "[width / 2, height / 2]"}}
+    elif zoom:
         # Fit against the land bounds without Antarctica, with more latitude north of the equator.
         projection.update(scale={"expr": f"min(width / 5.52, height / 2.36) * {1 + .25 * zoom}"},
                           translate={"expr": "[width / 2, height * .56]"})
@@ -135,7 +197,8 @@ def map_spec(feature: dict | None, mode: str, zoom: int) -> dict:
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "width": "container", "height": 100, "padding": {"top": 0, "bottom": 0, "left": 0, "right": 0},
-        "projection": projection, "layer": [{"data": geography, "layer": layers}],
+        "projection": projection,
+        "layer": [{"data": geography, "layer": layers}, *([city_layer] if cities else [])],
         "config": {"background": "#ffffff", "view": {"stroke": None}},
         "usermeta": {"embedOptions": {"renderer": "svg"}},
     }

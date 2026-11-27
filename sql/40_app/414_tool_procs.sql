@@ -334,3 +334,279 @@ EXCEPTION
     RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
 END;
 $$;
+
+-- city_breakdown: where did it happen? Every city (optionally one region) ranked by share change, with coordinates.
+CREATE OR REPLACE PROCEDURE SR_DB.APP.TOOL_CITY_SHARE(P_BRAND VARCHAR, P_REGION VARCHAR, P_CMP_CODE VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  cmp     VARCHAR DEFAULT COALESCE(NULLIF(UPPER(TRIM(P_CMP_CODE)), ''), 'L4W_VS_YA');
+  reg_in  VARCHAR DEFAULT UPPER(TRIM(REPLACE(COALESCE(P_REGION, ''), ' Retail', '')));
+  b       VARIANT;
+  reg     VARCHAR;
+  cat     VARCHAR;
+  cities  ARRAY;
+  regions ARRAY;
+BEGIN
+  IF (cmp NOT IN ('L4W_VS_YA', 'L4W_VS_PP', 'L12W_VS_YA', 'L52W_VS_YA')) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'BAD_INPUT', 'detail', 'Unknown comparison ' || cmp));
+  END IF;
+  CALL SR_DB.APP.SP_RESOLVE('BRAND', :P_BRAND, :cmp) INTO :b;
+  IF (GET(b, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(b, 'error', GET(b, 'status'))); END IF;
+  LET bv VARCHAR := GET(b, 'value')::VARCHAR;
+  IF (reg_in NOT IN ('', 'ALL', 'ALL INDIA', 'INDIA')) THEN
+    SELECT MAX(REGION) INTO :reg FROM SR_DB.SEM.V_TOOL_CITY_SHARE WHERE UPPER(REGION) = :reg_in;
+    IF (reg IS NULL) THEN
+      LET known ARRAY := (SELECT ARRAY_AGG(DISTINCT REGION) FROM SR_DB.SEM.V_TOOL_CITY_SHARE);
+      RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'NOT_FOUND', 'what', 'region', 'input', P_REGION, 'candidates', known));
+    END IF;
+  END IF;
+  -- The brand's scope category when it sells there, else its largest category in the comparison
+  LET scope_cat VARCHAR := SR_DB.OPS.CFG('SCOPE_CATEGORY')::VARCHAR;
+  SELECT CATEGORY INTO :cat FROM SR_DB.SEM.V_TOOL_CITY_SHARE
+   WHERE BRAND = :bv AND CMP_CODE = :cmp
+   GROUP BY CATEGORY
+   ORDER BY IFF(CATEGORY = :scope_cat, 0, 1), SUM(ABS(VALUE_AT_STAKE)) DESC
+   LIMIT 1;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('city', CITY, 'state', STATE, 'state_code', STATE_CODE, 'region', REGION,
+                                    'lat', LATITUDE, 'lon', LONGITUDE, 'share_now_pct', 100 * SH1,
+                                    'share_before_pct', 100 * SH0, 'change_pts', 100 * D_SHARE,
+                                    'value_at_stake', VALUE_AT_STAKE))
+           WITHIN GROUP (ORDER BY D_SHARE)
+    INTO :cities
+    FROM SR_DB.SEM.V_TOOL_CITY_SHARE
+   WHERE BRAND = :bv AND CMP_CODE = :cmp AND CATEGORY = :cat AND MARKET_LEVEL = 'CITY'
+     AND (:reg IS NULL OR REGION = :reg);
+  IF (cities IS NULL OR ARRAY_SIZE(cities) = 0) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'NO_DATA', 'detail', 'No city markets for this brand and comparison'));
+  END IF;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('region', REGION, 'change_pts', 100 * D_SHARE, 'value_at_stake', VALUE_AT_STAKE))
+           WITHIN GROUP (ORDER BY D_SHARE)
+    INTO :regions
+    FROM SR_DB.SEM.V_TOOL_CITY_SHARE
+   WHERE BRAND = :bv AND CMP_CODE = :cmp AND CATEGORY = :cat AND MARKET_LEVEL = 'RETAILER'
+     AND (:reg IS NULL OR REGION = :reg);
+  RETURN TO_JSON(OBJECT_CONSTRUCT(
+    'brand', bv, 'category', cat, 'cmp_code', cmp, 'region', COALESCE(reg, 'ALL'),
+    'cities', cities, 'regions', COALESCE(regions, ARRAY_CONSTRUCT()),
+    'note', 'Cities are ordered from the largest loss to the largest gain. City shares are within each city; '
+            || 'they do not add up to the region share.',
+    'source', 'SEM.V_TOOL_CITY_SHARE'));
+EXCEPTION
+  WHEN OTHER THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
+END;
+$$;
+
+-- yearly_trend: the multi-year view. Value share by calendar year for one brand and market (city, region or total).
+CREATE OR REPLACE PROCEDURE SR_DB.APP.TOOL_YEARLY_TREND(P_BRAND VARCHAR, P_MARKET VARCHAR, P_CATEGORY VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  b     VARIANT;
+  m     VARIANT;
+  cat   VARCHAR;
+  years ARRAY;
+BEGIN
+  CALL SR_DB.APP.SP_RESOLVE('BRAND', :P_BRAND, 'L52W_VS_YA') INTO :b;
+  IF (GET(b, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(b, 'error', GET(b, 'status'))); END IF;
+  CALL SR_DB.APP.SP_RESOLVE('MARKET', :P_MARKET, 'L52W_VS_YA') INTO :m;
+  IF (GET(m, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(m, 'error', GET(m, 'status'))); END IF;
+  LET bv VARCHAR := GET(b, 'value')::VARCHAR;
+  LET mv VARCHAR := GET(m, 'value')::VARCHAR;
+  SELECT MAX(CATEGORY) INTO :cat FROM SR_DB.SEM.V_TOOL_YEARLY_SHARE
+   WHERE BRAND = :bv AND MARKET_ID = :mv
+     AND UPPER(CATEGORY) = UPPER(COALESCE(NULLIF(TRIM(:P_CATEGORY), ''), SR_DB.OPS.CFG('SCOPE_CATEGORY')::VARCHAR));
+  IF (cat IS NULL) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'NO_DATA', 'detail', 'No yearly data for this brand, market and category'));
+  END IF;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('year', CAL_YEAR, 'weeks', WEEKS, 'value_share_pct', 100 * VALUE_SHARE,
+                                    'value_sales', VALUE_SALES, 'cat_value_sales', CAT_VALUE_SALES))
+           WITHIN GROUP (ORDER BY CAL_YEAR)
+    INTO :years
+    FROM SR_DB.SEM.V_TOOL_YEARLY_SHARE
+   WHERE BRAND = :bv AND MARKET_ID = :mv AND CATEGORY = :cat;
+  RETURN TO_JSON(OBJECT_CONSTRUCT(
+    'brand', bv, 'market', GET(m, 'name'), 'category', cat, 'years', years,
+    'note', 'Years with fewer than 52 weeks are partial; compare their share, not their sales, with full years.',
+    'source', 'SEM.V_TOOL_YEARLY_SHARE'));
+EXCEPTION
+  WHEN OTHER THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
+END;
+$$;
+
+-- price_promo: is price or promotion the problem? The brand vs every competitor in one market and period, vs year ago.
+CREATE OR REPLACE PROCEDURE SR_DB.APP.TOOL_PRICE_PROMO(P_BRAND VARCHAR, P_MARKET VARCHAR, P_PERIOD VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  per    VARCHAR DEFAULT COALESCE(NULLIF(UPPER(TRIM(P_PERIOD)), ''), 'L12W');
+  b      VARIANT;
+  m      VARIANT;
+  cat    VARCHAR;
+  mine   VARIANT;
+  rivals ARRAY;
+BEGIN
+  IF (per NOT IN ('L4W', 'L12W', 'L52W')) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'BAD_INPUT', 'detail', 'Period must be L4W, L12W or L52W'));
+  END IF;
+  CALL SR_DB.APP.SP_RESOLVE('BRAND', :P_BRAND, 'L4W_VS_YA') INTO :b;
+  IF (GET(b, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(b, 'error', GET(b, 'status'))); END IF;
+  CALL SR_DB.APP.SP_RESOLVE('MARKET', :P_MARKET, 'L4W_VS_YA') INTO :m;
+  IF (GET(m, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(m, 'error', GET(m, 'status'))); END IF;
+  LET bv VARCHAR := GET(b, 'value')::VARCHAR;
+  LET mv VARCHAR := GET(m, 'value')::VARCHAR;
+  SELECT MAX(CATEGORY) INTO :cat FROM SR_DB.SEM.V_TOOL_PRICE_PROMO WHERE BRAND = :bv AND MARKET_ID = :mv AND PERIOD_CODE = :per;
+  IF (cat IS NULL) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'NO_DATA', 'detail', 'No sales for this brand, market and period'));
+  END IF;
+  SELECT OBJECT_CONSTRUCT('value_share_pct', 100 * VALUE_SHARE, 'share_chg_ya_pts', 100 * SHARE_CHG_YA,
+                          'price_per_unit', PRICE_PER_UNIT, 'price_index', PRICE_INDEX, 'price_index_ya', PRICE_INDEX_YA,
+                          'price_chg_ya_pct', 100 * PRICE_CHG_YA, 'promo_share_pct', 100 * PROMO_SHARE,
+                          'promo_share_ya_pct', 100 * PROMO_SHARE_YA, 'promo_lift_pct', 100 * PROMO_LIFT)
+    INTO :mine
+    FROM SR_DB.SEM.V_TOOL_PRICE_PROMO WHERE BRAND = :bv AND MARKET_ID = :mv AND PERIOD_CODE = :per AND CATEGORY = :cat;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('brand', BRAND, 'value_share_pct', 100 * VALUE_SHARE, 'price_index', PRICE_INDEX,
+                                    'price_chg_ya_pct', 100 * PRICE_CHG_YA, 'promo_share_pct', 100 * PROMO_SHARE,
+                                    'share_chg_ya_pts', 100 * SHARE_CHG_YA))
+           WITHIN GROUP (ORDER BY VALUE_SHARE DESC)
+    INTO :rivals
+    FROM (SELECT * FROM SR_DB.SEM.V_TOOL_PRICE_PROMO
+          WHERE MARKET_ID = :mv AND PERIOD_CODE = :per AND CATEGORY = :cat AND BRAND <> :bv
+          ORDER BY VALUE_SHARE DESC LIMIT 8);
+  RETURN TO_JSON(OBJECT_CONSTRUCT(
+    'brand', bv, 'market', GET(m, 'name'), 'category', cat, 'period', per, 'brand_metrics', mine,
+    'top_competitors', COALESCE(rivals, ARRAY_CONSTRUCT()),
+    'note', 'Price index: brand price per unit / category price per unit (1.0 = category average). Promo share: '
+            || 'sales above base (incremental) / sales. Year-ago (_ya) values cover the same weeks a year earlier.',
+    'source', 'SEM.V_TOOL_PRICE_PROMO'));
+EXCEPTION
+  WHEN OTHER THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
+END;
+$$;
+
+-- benchmark: one company against its rivals in one market and period, and where it is winning or losing.
+CREATE OR REPLACE PROCEDURE SR_DB.APP.TOOL_BENCHMARK(P_MANUFACTURER VARCHAR, P_MARKET VARCHAR, P_PERIOD VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  per     VARCHAR DEFAULT COALESCE(NULLIF(UPPER(TRIM(P_PERIOD)), ''), 'L12W');
+  txt     VARCHAR DEFAULT UPPER(TRIM(COALESCE(P_MANUFACTURER, '')));
+  m       VARIANT;
+  mfr     VARCHAR;
+  n_match NUMBER;
+  cat     VARCHAR;
+  table_  ARRAY;
+  wins    ARRAY;
+BEGIN
+  IF (per NOT IN ('L4W', 'L12W', 'L52W')) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'BAD_INPUT', 'detail', 'Period must be L4W, L12W or L52W'));
+  END IF;
+  CALL SR_DB.APP.SP_RESOLVE('MARKET', :P_MARKET, 'L4W_VS_YA') INTO :m;
+  IF (GET(m, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(m, 'error', GET(m, 'status'))); END IF;
+  LET mv VARCHAR := GET(m, 'value')::VARCHAR;
+  -- company: exact name, else a unique name containing the input; default the configured focus manufacturer
+  IF (txt = '') THEN
+    txt := UPPER(SR_DB.OPS.CFG('FOCUS_MANUFACTURER')::VARCHAR);
+  END IF;
+  SELECT MAX(MANUFACTURER), COUNT(DISTINCT MANUFACTURER) INTO :mfr, :n_match FROM SR_DB.SEM.V_TOOL_BENCHMARK
+   WHERE MARKET_ID = :mv AND PERIOD_CODE = :per AND UPPER(MANUFACTURER) = :txt;
+  IF (n_match = 0) THEN
+    SELECT MAX(MANUFACTURER), COUNT(DISTINCT MANUFACTURER) INTO :mfr, :n_match FROM SR_DB.SEM.V_TOOL_BENCHMARK
+     WHERE MARKET_ID = :mv AND PERIOD_CODE = :per AND CONTAINS(UPPER(MANUFACTURER), :txt);
+  END IF;
+  IF (n_match <> 1) THEN
+    LET known ARRAY := (SELECT ARRAY_AGG(DISTINCT MANUFACTURER) FROM SR_DB.SEM.V_TOOL_BENCHMARK WHERE MARKET_ID = :mv);
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', IFF(n_match = 0, 'NOT_FOUND', 'AMBIGUOUS'), 'what', 'manufacturer',
+                                    'input', P_MANUFACTURER, 'candidates', known));
+  END IF;
+  LET scope_cat VARCHAR := SR_DB.OPS.CFG('SCOPE_CATEGORY')::VARCHAR;
+  SELECT CATEGORY INTO :cat FROM SR_DB.SEM.V_TOOL_BENCHMARK
+   WHERE MANUFACTURER = :mfr AND MARKET_ID = :mv AND PERIOD_CODE = :per
+   GROUP BY CATEGORY ORDER BY IFF(CATEGORY = :scope_cat, 0, 1), SUM(VALUE_SALES) DESC LIMIT 1;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('manufacturer', MANUFACTURER, 'is_focus', MANUFACTURER = :mfr, 'rank', SHARE_RANK,
+                                    'rank_ya', SHARE_RANK_YA, 'value_share_pct', 100 * VALUE_SHARE,
+                                    'share_chg_ya_pts', 100 * SHARE_CHG_YA, 'acv', ACV_DIST_PCT, 'acv_chg_ya', ACV_CHG_YA,
+                                    'velocity', VELOCITY, 'price_index', PRICE_INDEX, 'skus', SKUS, 'brands', BRANDS,
+                                    'sales_growth_ya_pct', 100 * SALES_GROWTH_YA))
+           WITHIN GROUP (ORDER BY SHARE_RANK)
+    INTO :table_
+    FROM SR_DB.SEM.V_TOOL_BENCHMARK WHERE MARKET_ID = :mv AND PERIOD_CODE = :per AND CATEGORY = :cat;
+  -- where the company wins or loses: its share change vs year ago in each region and city
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('market', MARKET_NAME, 'level', MARKET_LEVEL, 'rank', SHARE_RANK,
+                                    'value_share_pct', 100 * VALUE_SHARE, 'share_chg_ya_pts', 100 * SHARE_CHG_YA))
+           WITHIN GROUP (ORDER BY SHARE_CHG_YA)
+    INTO :wins
+    FROM SR_DB.SEM.V_TOOL_BENCHMARK
+   WHERE MANUFACTURER = :mfr AND PERIOD_CODE = :per AND CATEGORY = :cat AND MARKET_LEVEL IN ('RETAILER', 'CITY');
+  RETURN TO_JSON(OBJECT_CONSTRUCT(
+    'manufacturer', mfr, 'market', GET(m, 'name'), 'category', cat, 'period', per,
+    'league_table', COALESCE(table_, ARRAY_CONSTRUCT()), 'by_market', COALESCE(wins, ARRAY_CONSTRUCT()),
+    'note', 'Velocity: units per store-week selling. Price index: company price per unit / category price per unit. '
+            || 'by_market is ordered from the largest share loss vs year ago to the largest gain.',
+    'source', 'SEM.V_TOOL_BENCHMARK'));
+EXCEPTION
+  WHEN OTHER THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
+END;
+$$;
+
+-- risk_outlook: what is about to go wrong? The latest early-warning signals, optionally for one brand or market.
+CREATE OR REPLACE PROCEDURE SR_DB.APP.TOOL_RISK_OUTLOOK(P_BRAND VARCHAR, P_MARKET VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+  bv   VARCHAR DEFAULT NULL;
+  mv   VARCHAR DEFAULT NULL;
+  r    VARIANT;
+  sigs ARRAY;
+BEGIN
+  IF (TRIM(COALESCE(P_BRAND, '')) <> '') THEN
+    CALL SR_DB.APP.SP_RESOLVE('BRAND', :P_BRAND, 'L4W_VS_YA') INTO :r;
+    IF (GET(r, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(r, 'error', GET(r, 'status'))); END IF;
+    bv := GET(r, 'value')::VARCHAR;
+  END IF;
+  IF (TRIM(COALESCE(P_MARKET, '')) <> '') THEN
+    CALL SR_DB.APP.SP_RESOLVE('MARKET', :P_MARKET, 'L4W_VS_YA') INTO :r;
+    IF (GET(r, 'status')::VARCHAR <> 'OK') THEN RETURN TO_JSON(OBJECT_INSERT(r, 'error', GET(r, 'status'))); END IF;
+    mv := GET(r, 'value')::VARCHAR;
+  END IF;
+  SELECT ARRAY_AGG(OBJECT_CONSTRUCT('brand', BRAND, 'market', MARKET_NAME, 'level', MARKET_LEVEL, 'signal', SIGNAL,
+                                    'latest_week', LATEST_WEEK, 'lever_latest', LEVER_LATEST, 'lever_l4w', LEVER_L4W,
+                                    'lever_chg_pct', 100 * LEVER_CHG, 'projected_share_pts', PROJECTED_SHARE_PTS,
+                                    'ml_confirmed', ML_CONFIRMED))
+           WITHIN GROUP (ORDER BY ABS(COALESCE(PROJECTED_SHARE_PTS, 0)) DESC)
+    INTO :sigs
+    FROM SR_DB.SEM.V_TOOL_EARLY_WARNING
+   WHERE (:bv IS NULL OR BRAND = :bv) AND (:mv IS NULL OR MARKET_ID = :mv);
+  IF (sigs IS NULL OR ARRAY_SIZE(sigs) = 0) THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'NO_DATA', 'detail', 'No early-warning signal in the latest run for this filter'));
+  END IF;
+  RETURN TO_JSON(OBJECT_CONSTRUCT(
+    'brand', bv, 'market_id', mv, 'signals', sigs,
+    'note', 'DIST_DROP: latest-week distribution share against its last-four-week average; PRICE_RISE: latest-week price '
+            || 'index against its last-four-week average. projected_share_pts: the mechanical effect on next L4W share if '
+            || 'the latest week persists; not a forecast. ml_confirmed: the anomaly model also flagged it.',
+    'source', 'SEM.V_TOOL_EARLY_WARNING'));
+EXCEPTION
+  WHEN OTHER THEN
+    RETURN TO_JSON(OBJECT_CONSTRUCT('error', 'TOOL_FAILED', 'sqlcode', SQLCODE, 'detail', LEFT(SQLERRM, 300)));
+END;
+$$;
