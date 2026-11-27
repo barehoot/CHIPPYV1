@@ -657,19 +657,21 @@ def _m_elasticity(c: Ctx) -> None:
             ("Distribution elasticity", f"{di['coef']:.2f}", f"95%: {di['lo']:.2f} to {di['hi']:.2f}", ""),
             ("Fit (R²)", f"{e['r2']:.2f}", f"{e['n']} retailer-weeks", ""),
             ("Reads as", f"{-pr['coef']:.1f}% units", "lost for each 1% price rise", "")])
+    allb = _fit("elasticity_all", c.category, c.brand, "", c.masked)
+    h = max(420, charts.bars_h_height(len(allb)))                  # both charts as tall as the brand bars, so the cards end level
     left, right = nav.stack("studio_el").columns(2)
     with left, nav.card("studio_el_all"):
         nav.section("Every brand's price elasticity", "With 95% intervals. More negative: more price sensitive.")
-        allb = _fit("elasticity_all", c.category, c.brand, "", c.masked)
         if len(allb):
             allb = allb.assign(ERR=(allb.PRICE_HI - allb.PRICE_LO) / 2).sort_values("PRICE_EL")
-            _plot(charts.pl_bars_h(allb, "BRAND", "PRICE_EL", "Price elasticity", err="ERR", fmt=".2f"), "studio_el_all_chart")
+            _plot(charts.pl_bars_h(allb, "BRAND", "PRICE_EL", "Price elasticity", err="ERR", fmt=".2f", height=h),
+                  "studio_el_all_chart")
     with right, nav.card("studio_el_fit"):
         nav.section("Actual against fitted units", "Each point is one retailer-week; the closer the points lie to a "
                     "straight rising line, the better the fit.")
         f = e["frame"].reset_index(drop=True)
-        _plot(charts.pl_explore(f.assign(ROW_ID=range(len(f))), "Scatter", "FITTED", "ACTUAL", "RETAILER", "Actual units"),
-              "studio_el_fit_chart")
+        _plot(charts.pl_explore(f.assign(ROW_ID=range(len(f))), "Scatter", "FITTED", "ACTUAL", "RETAILER", "Actual units",
+                                height=h, x_title="Fitted units (model)"), "studio_el_fit_chart")
     _card("Elasticity", "OLS on the log of units: log price, log distribution (ACV), retailer fixed effects, a yearly "
           "season and a trend, with HC3 robust standard errors.",
           f"R² {e['r2']:.2f} on {e['n']} retailer-weeks; price {_p(pr['p'])}, distribution {_p(di['p'])}.",
@@ -753,7 +755,9 @@ def _m_drivers(c: Ctx) -> None:
     with right, nav.card("studio_dm_pdp"):
         nav.section("How share responds", "Partial dependence: the model's average share as one driver moves")
         if dm["curves"]:
-            _plot(charts.pl_curves(dm["curves"], an.DRIVER_FEATURES, "Value share %"), "studio_dm_pdp_chart")
+            # as tall as the importance bars beside it, so the two cards end level
+            _plot(charts.pl_curves(dm["curves"], an.DRIVER_FEATURES, "Value share %",
+                                   height=max(320, charts.bars_h_height(len(dm["importance"])))), "studio_dm_pdp_chart")
     _card("Driver model", "Gradient boosting (scikit-learn, 150 trees of depth 3) on the brand's value share per "
           "retailer-week, from its price index, distribution, SKUs and promotion depth, the competitors' price index and "
           "distribution, and the season. Scored out of time against a linear model.",
@@ -779,7 +783,9 @@ def _m_segments(c: Ctx) -> None:
     with nav.card("studio_sg_chart"):
         _plot(charts.pl_segments(pts, x, y, an.SEGMENT_FEATURES[x], an.SEGMENT_FEATURES[y]), "studio_sg_plot")
     prof = sg["profile"].rename(columns={**an.SEGMENT_FEATURES, "SEGMENT": "Segment", "POINTS": "Positions"})
-    st.dataframe(nav.striped(prof.round(2)), hide_index=True, width="stretch")
+    st.dataframe(nav.striped(prof.round(2)), hide_index=True, width="stretch",
+                 column_config={col: st.column_config.NumberColumn(format="%.0f" if col == "Positions" else "%.2f")
+                                for col in prof.columns if pd.api.types.is_numeric_dtype(prof[col])})
     _card("Segments", "k-means on six standardised features of every brand at every retailer (share, share change, price "
           "index, distribution and its change, sales growth; last 4 weeks vs the 4 before); k from 2 to 5 by silhouette.",
           f"k = {sg['k']}, silhouette {sg['silhouette']:.2f}.",
@@ -806,11 +812,17 @@ def _m_anomaly(c: Ctx) -> None:
             "Week": pd.to_datetime(rows.WEEK_END_DATE).dt.strftime("%d %b %Y"), "Retailer": rows.RETAILER, "SKU": rows.ITEM_DESC,
             "Stands out on": rows.WHY, "Robust z": rows.WHY_Z.round(1), "Sales WoW": (100 * rows.SALES_WOW).round(1),
             "Price WoW": (100 * rows.PRICE_WOW).round(1), "ACV change": rows.ACV_WOW.round(1),
-            "Anomaly score": rows.SCORE.round(3)})), hide_index=True, width="stretch", row_height=34)
+            "Anomaly score": rows.SCORE.round(3)})), hide_index=True, width="stretch", row_height=34,
+            column_config={"Robust z": st.column_config.NumberColumn(format="%.1f"),
+                           "Sales WoW": st.column_config.NumberColumn(format="%+.1f%%"),
+                           "Price WoW": st.column_config.NumberColumn(format="%+.1f%%"),
+                           "ACV change": st.column_config.NumberColumn(format="%+.1f"),
+                           "Anomaly score": st.column_config.NumberColumn(format="%.3f")})
     with nav.card("studio_an_chart"):
         allr = res["all"].assign(FLAG=np.where(res["all"].FLAGGED, "Flagged", "Normal"))
         allr = allr.assign(ROW_ID=range(len(allr)))
-        _plot(charts.pl_explore(allr, "Scatter", "PRICE_WOW", "SALES_WOW", "FLAG", "Sales change week on week"), "studio_an_plot")
+        _plot(charts.pl_explore(allr, "Scatter", "PRICE_WOW", "SALES_WOW", "FLAG", "Sales change week on week",
+                                x_title="Price change week on week"), "studio_an_plot")
         st.caption("Each point is one SKU at one retailer in one week: price change (x) against sales change (y).")
     _card("Anomaly scan", "Isolation Forest (scikit-learn, 300 trees, 2% contamination) on week-on-week sales, price and "
           "distribution changes from SQL, plus units per store against the SKU's own median.",
@@ -828,14 +840,15 @@ def _m_cannibal(c: Ctx) -> None:
     _tiles([("Strongest trade", top.BRAND if top is not None else "–", f"correlation {top.CORR:+.2f}" if top is not None else "", ""),
             ("Share it takes per point lost", f"{top.GAIN_PER_PT_LOST:.2f} pts" if top is not None else "–", "OLS slope", ""),
             ("Weeks", str(cb["weeks"]), "week-on-week share changes", ""), ("Brands", str(len(pr) + 1), "in the category", "")])
+    h = max(charts.heat_height(len(cb["matrix"])), charts.bars_h_height(len(pr)))   # one height, so the cards end level
     left, right = nav.stack("studio_cb").columns(2)
     with left, nav.card("studio_cb_pairs"):
         nav.section(f"Who moves against {c.brand}", "Correlation of week-on-week share changes; negative means they trade share")
-        _plot(charts.pl_bars_h(pr.sort_values("CORR", ascending=False), "BRAND", "CORR", "Correlation", signed=True, fmt=".2f"),
-              "studio_cb_pairs_chart")
+        _plot(charts.pl_bars_h(pr.sort_values("CORR", ascending=False), "BRAND", "CORR", "Correlation", signed=True, fmt=".2f",
+                               height=h), "studio_cb_pairs_chart")
     with right, nav.card("studio_cb_matrix"):
         nav.section("All brands", "Correlation matrix of week-on-week share changes")
-        _plot(charts.pl_heat(cb["matrix"].round(2), "Correlation"), "studio_cb_matrix_chart")
+        _plot(charts.pl_heat(cb["matrix"].round(2), "Correlation", height=h), "studio_cb_matrix_chart")
     _card("Cannibalisation", "Pearson correlation of week-on-week changes in category value share between brands, and the "
           "OLS slope of each brand's change on this brand's change.", f"{cb['weeks']} weeks.",
           "Correlation shows who moves together, not who caused it; shares sum to 100, so some negative correlation is "

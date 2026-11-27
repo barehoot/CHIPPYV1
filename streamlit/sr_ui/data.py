@@ -90,18 +90,36 @@ _F_KEYS = ("sr_f_week", "sr_f_cat", "sr_f_mfr", "sr_f_brand", "sr_f_market", "sr
 class Filters:
     as_of: str              # ISO week-end date the analysis looks back from (never after AS_OF_WEEK_END)
     category: str
-    manufacturer: str | None
-    brand: str | None
+    manufacturers: tuple[str, ...]   # companies chosen; empty = all companies
+    brands: tuple[str, ...]          # brands chosen; empty = all brands
     market_id: str          # TOTAL, a region or a city
     weeks: int              # analysis period
+
+    @property
+    def manufacturer(self) -> str | None:
+        """The company when exactly one is chosen, else None (all, or several)."""
+        return self.manufacturers[0] if len(self.manufacturers) == 1 else None
+
+    @property
+    def brand(self) -> str | None:
+        """The brand when exactly one is chosen, else None (all, or several)."""
+        return self.brands[0] if len(self.brands) == 1 else None
+
+
+def _as_tuple(v) -> tuple[str, ...]:
+    """A stored company or brand choice as a tuple: a list from the multiselect, or a single name from an older
+    session ('' and None mean all)."""
+    if v is None or v == "":
+        return ()
+    return tuple(str(x) for x in v) if isinstance(v, (list, tuple)) else (str(v),)
 
 
 def filters() -> Filters:
     ss = st.session_state
     week = ss.get("sr_f_week") or str(cfg("AS_OF_WEEK_END"))
     return Filters(as_of=str(week), category=ss.get("sr_f_cat") or str(cfg("SCOPE_CATEGORY")),
-                   manufacturer=ss.get("sr_f_mfr", cfg("FOCUS_MANUFACTURER")) or None,
-                   brand=ss.get("sr_f_brand") or None,
+                   manufacturers=_as_tuple(ss.get("sr_f_mfr", cfg("FOCUS_MANUFACTURER"))),
+                   brands=_as_tuple(ss.get("sr_f_brand")),
                    market_id=ss.get("sr_f_market") or str(cfg("SCOPE_PARENT_MARKET")),
                    weeks=int(ss.get("sr_f_period") or 4))
 
@@ -110,7 +128,7 @@ def filters_active() -> bool:
     """True when the viewer moved any filter away from the configured scope."""
     f = filters()
     return (f.as_of != str(cfg("AS_OF_WEEK_END")) or f.category != str(cfg("SCOPE_CATEGORY"))
-            or f.manufacturer != (cfg("FOCUS_MANUFACTURER") or None) or f.brand is not None
+            or f.manufacturers != _as_tuple(cfg("FOCUS_MANUFACTURER")) or bool(f.brands)
             or f.market_id != str(cfg("SCOPE_PARENT_MARKET")))
 
 
@@ -262,14 +280,15 @@ def _shifts(run_id: str) -> pd.DataFrame:
 
 
 def shifts(run_id: str) -> pd.DataFrame:
-    """The run's ranked shifts, narrowed by the sidebar filters the viewer set (company, brand, market and the
+    """The run's ranked shifts, narrowed by the sidebar filters the viewer set (companies, brands, market and the
     markets under it). Untouched filters narrow nothing, so the default view is every shift of the run."""
     df = _shifts(run_id)
     ss = st.session_state
-    if ss.get("sr_f_mfr"):
-        df = df[df.MANUFACTURER == ss["sr_f_mfr"]]
-    if ss.get("sr_f_brand"):
-        df = df[df.BRAND == ss["sr_f_brand"]]
+    mfrs, brands = _as_tuple(ss.get("sr_f_mfr")), _as_tuple(ss.get("sr_f_brand"))
+    if mfrs:
+        df = df[df.MANUFACTURER.isin(mfrs)]
+    if brands:
+        df = df[df.BRAND.isin(brands)]
     m = ss.get("sr_f_market")
     if m and m != str(cfg("SCOPE_PARENT_MARKET")):
         tree = market_tree()

@@ -251,7 +251,7 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
 
 /* ---- Sidebar: deep teal, white text, pale-teal active item ---------------------------------------------- */
 [data-testid="stSidebar"] {{ border-right: 0 }}
-[data-testid="stSidebarNav"] a {{ border-radius: {RADIUS_SM}; margin: 2px 0; padding-top: 7px; padding-bottom: 7px;
+[data-testid="stSidebarNav"] a {{ border-radius: {RADIUS_SM}; margin: 1px 0; padding-top: 5px; padding-bottom: 5px;
   transition: background 0.15s ease }}
 [data-testid="stSidebarNav"] a:hover {{ background: rgba(255, 255, 255, 0.08) }}
 [data-testid="stSidebarNav"] a span:not([data-testid="stIconMaterial"]) {{ color: {T['white']} !important;
@@ -277,9 +277,9 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
 [data-testid="stSidebarHeader"] > div:first-child::after {{ content: "CHIPPY"; font-family: {HEAD}; font-weight: 700;
   font-size: 17px; letter-spacing: 0.18em; color: {T['white']}; line-height: 1 }}
 [data-testid="stNavSectionHeader"] {{ font-size: 11px !important; font-weight: 600; letter-spacing: 0.1em;
-  text-transform: uppercase; color: {T['sea']} !important; padding-top: 14px; margin-bottom: 2px }}
+  text-transform: uppercase; color: {T['sea']} !important; padding-top: 10px; margin-bottom: 1px }}
 [data-testid="stNavSectionHeader"] span {{ color: {T['sea']} !important }}
-[data-testid="stSidebarNav"] {{ border-bottom: 1px solid rgba(255, 255, 255, 0.12); padding-bottom: 12px }}
+[data-testid="stSidebarNav"] {{ border-bottom: 1px solid rgba(255, 255, 255, 0.12); padding-bottom: 8px }}
 [data-testid="stSidebarNavSeparator"] {{ display: none }}
 [data-testid="stMarkdownContainer"] p.sr-side-label {{ font-size: 11px !important; font-weight: 600; letter-spacing: 0.1em;
   text-transform: uppercase; color: {T['sea']}; margin: 16px 0 4px 0 }}
@@ -298,10 +298,93 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
 [data-testid="stSidebar"] [data-testid="stSelectbox"] svg {{ fill: {T['sea']} !important }}
 [data-testid="stSidebar"] [data-testid="stExpander"] details {{ border-color: rgba(255, 255, 255, 0.18) !important }}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary {{ font-weight: 600 }}
-/* The options list renders in a body-level portal, so give it the same dark treatment. */
-[data-baseweb="popover"] [role="listbox"] {{ background: {T['deep']} !important }}
-[data-baseweb="popover"] [role="option"] {{ color: {T['white']} !important }}
-[data-baseweb="popover"] [role="option"][aria-selected="true"] {{ background: {T['teal']} !important }}
+/* Options lists (every selectbox and multiselect, main area and sidebar) render in a body-level portal. Paint the
+   list, each row and every piece of text inside it explicitly: white rows with deep-teal text, pale teal on hover and
+   for the selected option. (White text was forced here before, which left options white-on-white.) */
+[data-baseweb="popover"] [role="listbox"] {{ background: {T['card']} !important }}
+[data-baseweb="popover"] :is([role="option"], [role="listbox"] li) {{ background: {T['card']} !important; color: {T['deep']} !important }}
+[data-baseweb="popover"] :is([role="option"], [role="listbox"] li) * {{ color: {T['deep']} !important }}
+[data-baseweb="popover"] :is([role="option"], [role="listbox"] li):hover,
+[data-baseweb="popover"] :is([role="option"], [role="listbox"] li)[aria-selected="true"] {{ background: {T['pale']} !important }}
+[data-baseweb="popover"] [role="option"][aria-disabled="true"],
+[data-baseweb="popover"] [role="option"][aria-disabled="true"] * {{ color: {T['slate']} !important }}
+/* ---- Analysis filters (filter_panel) --------------------------------------------------------------------------
+   In the sidebar, a compact button with the applied scope (key sr_filt_pop). It opens a dialog that floats
+   to the right of the sidebar over the dashboard, so nothing in the sidebar or the page moves; the six filters sit
+   in two columns and every chosen value reads in full. Run analysis closes it (filter_panel). */
+.st-key-sr_filt_pop button {{ justify-content: flex-start; text-align: left; min-height: 48px;
+  padding: 7px 12px !important; border-radius: 12px !important; border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  background: rgba(255, 255, 255, 0.07) !important }}
+.st-key-sr_filt_pop button:hover {{ background: rgba(255, 255, 255, 0.13) !important;
+  border-color: {T['pale']} !important }}
+.st-key-sr_filt_pop button p {{ color: {T['sea']} !important; font-size: 11.5px !important;
+  line-height: 1.35; margin: 0; text-align: left; white-space: normal }}
+.st-key-sr_filt_pop button p strong {{ color: {T['white']}; font-size: 13.5px; font-weight: 600 }}
+.st-key-sr_filt_pop button [data-testid="stIconMaterial"] {{ color: {T['pale']} !important }}
+/* the dialog floats just right of the sidebar, bottom-aligned with the button, over a light veil; nothing moves */
+div[role="dialog"]:has(.st-key-sr_side_filters) {{ position: fixed !important; left: 312px; bottom: 20px; top: auto;
+  margin: 0 !important; width: 560px !important; max-width: calc(100vw - 330px) !important; border-radius: 16px !important;
+  border: 1px solid {T['line']}; box-shadow: 0 14px 38px rgba(23, 63, 67, 0.28) !important; padding: 2px 4px 4px }}
+div[role="dialog"]:has(.st-key-sr_side_filters) h2 {{ font-family: {HEAD}; font-size: 17px !important; color: {T['deep']} }}
+[data-baseweb="modal"]:has(.st-key-sr_side_filters) > div:first-child {{ background: rgba(23, 63, 67, 0.12) !important }}
+@media (max-width: 768px) {{ div[role="dialog"]:has(.st-key-sr_side_filters) {{ left: 12px; right: 12px; width: auto !important;
+  max-width: none !important }} }}
+/* ---- Sidebar Filters card (filter_panel, key sr_side_filters) ---------------------------------------------------
+   An always-open mist card on the deep-teal sidebar, in two columns (As-of week | Period, Category | Market,
+   Company | Brand), sized so every control and Run analysis fit without scrolling. Its controls use the light style:
+   small slate uppercase labels, compact white fields with a sea-glass edge and deep-teal text, pale-teal chips for the
+   chosen companies and brands, and a deep-teal Run button. These rules are more specific than the dark sidebar-select
+   rules above, which still apply to any other sidebar control. */
+.st-key-sr_side_filters {{ gap: 8px !important }}
+.st-key-sr_side_filters [data-testid="stHorizontalBlock"] {{ gap: 8px !important; flex-wrap: nowrap !important }}
+.st-key-sr_side_filters [data-testid="stColumn"] {{ min-width: 0 !important; width: auto !important; flex: 1 1 0 !important }}
+.st-key-sr_side_filters_head {{ justify-content: space-between; flex-wrap: nowrap; gap: 4px !important; min-height: 0 }}
+.sr-filt-title {{ display: flex; align-items: center; gap: 7px; color: {T['deep']}; font-family: {HEAD}; font-size: 14px }}
+.sr-filt-title b {{ font-weight: 700 }}
+.sr-filt-title .sr-ico {{ font-size: 18px; color: {T['teal']} }}
+.st-key-sr_side_filters_head button {{ min-height: 26px; height: 26px; padding: 0 4px;
+  border: 0 !important; background: transparent !important }}
+.st-key-sr_side_filters_head button p {{ color: {T['slate']} !important; font-size: 12px !important; white-space: nowrap }}
+.st-key-sr_side_filters_head button [data-testid="stIconMaterial"] {{ color: {T['slate']} !important;
+  font-size: 18px; margin: 0 }}
+.st-key-sr_side_filters_head button:not(:disabled):hover [data-testid="stIconMaterial"] {{
+  color: {T['teal']} !important }}
+.st-key-sr_side_filters_head button:disabled {{ opacity: 0.35 }}
+.st-key-sr_side_filters [data-testid="stWidgetLabel"] {{ min-height: 0; margin-bottom: 3px }}
+.st-key-sr_side_filters [data-testid="stWidgetLabel"] p {{ color: {T['slate']} !important; font-size: 10.5px !important;
+  font-weight: 600 !important; letter-spacing: 0.06em; text-transform: uppercase; line-height: 1.2 }}
+.st-key-sr_side_filters [data-testid="stTooltipIcon"] svg, .st-key-sr_side_filters [data-testid="stTooltipIcon"] * {{
+  color: {T['sea']} !important; fill: {T['sea']} !important }}
+.st-key-sr_side_filters :is([data-testid="stSelectbox"], [data-testid="stMultiSelect"]) [data-baseweb="select"] > div {{
+  background: {T['card']} !important; border: 1px solid {T['sea']} !important; border-radius: 9px !important;
+  min-height: 32px; padding-left: 2px }}
+.st-key-sr_side_filters :is([data-testid="stSelectbox"], [data-testid="stMultiSelect"]) [data-baseweb="select"] > div:hover {{
+  border-color: {T['teal']} !important }}
+.st-key-sr_side_filters :is([data-testid="stSelectbox"], [data-testid="stMultiSelect"]) [data-baseweb="select"] * {{
+  color: {T['deep']} !important; font-size: 12.5px }}
+.st-key-sr_side_filters :is([data-testid="stSelectbox"], [data-testid="stMultiSelect"]) [data-baseweb="select"] input {{
+  caret-color: {T['deep']} }}
+.st-key-sr_side_filters [data-testid="stMultiSelect"] [data-baseweb="select"] [aria-hidden="true"]:not(svg),
+.st-key-sr_side_filters [data-testid="stMultiSelect"] [data-baseweb="select"] input::placeholder {{
+  color: {T['slate']} !important }}
+.st-key-sr_side_filters [data-baseweb="select"] svg {{ fill: {T['slate']} !important;
+  color: {T['slate']} !important; width: 16px; height: 16px }}
+.st-key-sr_side_filters [data-baseweb="tag"] {{ height: 20px; margin: 2px 2px 2px 0 !important;
+  padding: 0 2px 0 6px !important; border-radius: 6px !important; background: {T['pale']} !important; max-width: 100% }}
+.st-key-sr_side_filters [data-baseweb="tag"] span {{ font-size: 11px !important;
+  white-space: nowrap }}
+/* tight inner padding, so values such as 31 Oct 2026 fit the half-width fields */
+.st-key-sr_side_filters [data-baseweb="select"] > div > div:first-child {{ padding-left: 7px !important;
+  padding-right: 0 !important }}
+.st-key-sr_side_filters [data-baseweb="select"] > div > div:last-child {{ padding-right: 5px !important;
+  gap: 0 !important }}
+.st-key-sr_btn_filters_run button {{ background: {T['deep']} !important; border: 0 !important;
+  border-radius: 10px !important; min-height: 36px; justify-content: center; margin-top: 3px }}
+.st-key-sr_btn_filters_run button :is(p, span) {{ color: {T['white']} !important;
+  font-weight: 600; font-size: 13.5px }}
+.st-key-sr_btn_filters_run button:hover {{ background: {T['teal']} !important }}
+.st-key-sr_side_filters [data-testid="stCaptionContainer"], .st-key-sr_side_filters [data-testid="stCaptionContainer"] p {{
+  color: {T['slate']} !important; font-size: 11px !important; line-height: 1.35 }}
 /* ---- Chippy mascot: a small white card, the pose at 64px and a pale-teal speech bubble ------------------------- */
 [class*="st-key-sr_mascot"] {{ background: {T['card']}; border: 1px solid {T['line']} !important; border-radius: {RADIUS};
   box-shadow: {SHADOW}; padding: 8px 16px 8px 10px !important; align-items: center }}
@@ -376,7 +459,7 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
     width: 68px !important; min-width: 68px !important; max-width: 68px !important; margin-left: 0 !important;
     transform: none !important; visibility: visible !important; overflow: hidden; z-index: 999989;
     transition: width .22s ease .12s, min-width .22s ease .12s, max-width .22s ease .12s, box-shadow .22s ease .12s }}
-  [data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible), body:has([data-testid="stExpandSidebarButton"]:hover) *) {{ width: 264px !important; min-width: 264px !important; max-width: 264px !important;
+  [data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible), body:has([data-testid="stExpandSidebarButton"]:hover) *) {{ width: 300px !important; min-width: 300px !important; max-width: 300px !important;
     box-shadow: 8px 0 28px rgba(23, 63, 67, 0.28); transition-delay: .08s }}
   [data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stMain"] {{ padding-left: 68px }}
   [data-testid="stAppViewContainer"]:has([data-testid="stSidebar"][aria-expanded="false"]) [data-testid="stMainBlockContainer"] {{ max-width: 1480px }}
@@ -391,7 +474,9 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
     width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center;
     z-index: 999999; transition: left .22s ease .12s, top .22s ease .12s }}
   body:has([data-testid="stSidebar"][aria-expanded="false"]:is(:hover, :has(:focus-visible))) [data-testid="stExpandSidebarButton"],
-  body:has([data-testid="stSidebar"][aria-expanded="false"]):has([data-testid="stExpandSidebarButton"]:hover) [data-testid="stExpandSidebarButton"] {{ left: 220px; top: 20px; transition-delay: .08s }}
+  body:has([data-testid="stSidebar"][aria-expanded="false"]):has([data-testid="stExpandSidebarButton"]:hover) [data-testid="stExpandSidebarButton"] {{ left: 256px; top: 20px; transition-delay: .08s }}
+  /* pinned open: the same 300px as the hover rail, so the two-column Filters card has room */
+  [data-testid="stSidebar"][aria-expanded="true"] {{ width: 300px !important; min-width: 300px !important; max-width: 300px !important }}
   /* Keep the first track aligned with the icon rail as the sidebar reveals its labels. */
   [data-testid="stSidebarContent"] {{ scrollbar-gutter: stable; padding-inline-start: 0 }}
   [data-testid="stSidebarHeader"] {{ box-sizing: border-box; padding: 14px 0 0 !important;
@@ -421,6 +506,8 @@ a:focus-visible {{ outline: 2px solid {T['teal']}; outline-offset: 2px }}
     align-items: center; background: transparent; border-radius: 10px }}
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope:hover {{ background: rgba(255, 255, 255, 0.08) }}
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .sr-scope .sr-ico {{ font-size: 20px }}
+  /* the Analysis filters button (a styled container, not an element) folds away with the rest of the closed rail */
+  [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) .st-key-sr_filt_pop {{ display: none !important }}
   /* Streamlit reserves a scrollbar gutter on both sides; a closed rail never scrolls, so the rail gets all 68px */
   [data-testid="stSidebar"][aria-expanded="false"]:not(:hover):not(:has(:focus-visible)):not(body:has([data-testid="stExpandSidebarButton"]:hover) *) [data-testid="stSidebarContent"] {{ scrollbar-gutter: auto !important; overflow: hidden !important }}
   /* Streamlit pads the sidebar's inner wrappers; in the closed rail every wrapper spans the full 68px instead */
@@ -1084,52 +1171,92 @@ def header(title: str, icon: str | None = None, subtitle: str | None = None) -> 
 
 # ---- Sidebar ----------------------------------------------------------------------------------------------------
 
+_DRAFT = ("sr_d_week", "sr_d_period", "sr_d_cat", "sr_d_market", "sr_d_mfr", "sr_d_brand")
+
+
+def _week_label(w: str) -> str:
+    try:
+        return date.fromisoformat(str(w)[:10]).strftime("%d %b %Y")
+    except ValueError:
+        return str(w)
+
+
 def filter_panel() -> None:
     """Sidebar filters that drive Radar, Shift Detail (incl. the Brand explorer and Insight Studio), the Intelligence
-    brief and the share report. Collapsed by default and labelled with the applied scope, so the side menu stays a
-    menu; opening it shows the widgets. Widgets edit a draft; 'Run analysis' applies it (data.filters() reads the
-    applied sr_f_* keys, defaulting to the configured scope), so one click recomputes every page from SQL."""
+    brief and the share report. In the sidebar, a compact 'Analysis filters' button with the applied scope; it opens
+    the filters in a dialog that floats just right of the sidebar (CSS), so the sidebar and the page never shift."""
+    from sr_ui import data
+    f = data.filters()
+    labels = _market_labels(data.market_tree())
+    summary = " · ".join([str(f.category), str(labels.get(f.market_id, f.market_id)).lstrip("· "), f"{f.weeks}w"])
+    with st.container(key="sr_filt_pop"):
+        if st.button(f"**Analysis filters**  \n{summary}", icon=":material/tune:", key="sr_btn_filters_open",
+                     width="stretch", help="Change the week, period, category, market, companies and brands"):
+            _filters_dialog()
+
+
+def _market_labels(mkts) -> dict:
+    return {r.MARKET_ID: ("" if r.MARKET_LEVEL == "TOTAL" else "· " if r.MARKET_LEVEL != "CITY" else "· · ")
+            + str(r.MARKET_NAME) for r in mkts.itertuples()}
+
+
+@st.dialog("Analysis filters", width="large")
+def _filters_dialog() -> None:
+    """The six filters in two columns (As-of week | Period, Category | Market, Company | Brand); Company and Brand take
+    several values. The widgets edit a draft (sr_d_* keys): a dialog is a fragment, so a draft change reruns only the
+    dialog, to refresh the dependent lists (companies in the category, brands of the chosen companies), while the
+    pages keep reading the applied sr_f_* keys (data.filters(), defaulting to the configured scope). Run analysis
+    applies the draft and reruns the app, which closes the dialog and recomputes every page from SQL."""
     from sr_ui import data, format as fmt
     ss = st.session_state
     f = data.filters()
-    tree, mkts, weeks = data.product_tree(), data.market_tree(), data.filter_weeks()
-    labels = {r.MARKET_ID: ("" if r.MARKET_LEVEL == "TOTAL" else "· " if r.MARKET_LEVEL != "CITY" else "· · ")
-              + str(r.MARKET_NAME) for r in mkts.itertuples()}
-    market_name = str(labels.get(f.market_id, f.market_id)).lstrip("· ")
-    summary = " · ".join([str(f.category), market_name, f"{f.weeks}w"])
-    with st.expander(f"Filters · {summary}", expanded=bool(ss.pop("sr_filters_open", False)),
-                     icon=":material/tune:"):
-        with st.form("sr_filter_form", border=False):
-            wk_opts = weeks or [f.as_of]
-            week = st.selectbox("As-of week", wk_opts, index=wk_opts.index(f.as_of) if f.as_of in wk_opts else 0,
-                                help="Analyse the data as it stood at the end of this week (back to 2020).")
-            cats = sorted(tree.CATEGORY.unique())
-            cat = st.selectbox("Category", cats, index=cats.index(f.category) if f.category in cats else 0)
-            mfrs = ["All companies"] + sorted(tree[tree.CATEGORY == cat].MANUFACTURER.unique())
-            mfr = st.selectbox("Company", mfrs,
-                               format_func=lambda m: m if m == "All companies" else fmt.name(m, "MANUFACTURER"),
-                               index=mfrs.index(f.manufacturer) if f.manufacturer in mfrs else 0)
-            sub = tree[(tree.CATEGORY == cat) & ((mfr == "All companies") | (tree.MANUFACTURER == mfr))]
-            brands = ["All brands"] + sorted(sub.BRAND.unique())
-            brand = st.selectbox("Brand", brands, format_func=lambda b: b if b == "All brands" else fmt.name(b),
-                                 index=brands.index(f.brand) if f.brand in brands else 0)
-            ids = list(labels)
-            market = st.selectbox("Market", ids, format_func=labels.get,
-                                  index=ids.index(f.market_id) if f.market_id in ids else 0,
-                                  help="All India splits into regions; a region splits into its cities.")
-            period = st.select_slider("Period (weeks)", data.PERIODS, value=f.weeks if f.weeks in data.PERIODS else 4)
-            go = st.form_submit_button("Run analysis", icon=":material/play_arrow:", type="primary", width="stretch")
-        if go:
-            ss["sr_f_week"], ss["sr_f_cat"] = week, cat
-            ss["sr_f_mfr"] = "" if mfr == "All companies" else mfr
-            ss["sr_f_brand"] = None if brand == "All brands" else brand
-            ss["sr_f_market"], ss["sr_f_period"] = market, period
+    tree, weeks = data.product_tree(), data.filter_weeks()
+    labels = _market_labels(data.market_tree())
+    applied = (f.as_of, f.weeks, f.category, f.market_id, list(f.manufacturers), list(f.brands))
+    if ss.get("_sr_d_applied") != applied:       # first visit, or the filters were applied or reset elsewhere
+        for k, v in zip(_DRAFT, applied):
+            ss[k] = v
+        ss["_sr_d_applied"] = applied
+    # Keep every draft inside its current options (a category change narrows the companies, a company the brands).
+    wk_opts = weeks or [f.as_of]
+    cats = sorted(tree.CATEGORY.unique())
+    ids = list(labels)
+    for k, opts in (("sr_d_week", wk_opts), ("sr_d_cat", cats), ("sr_d_market", ids), ("sr_d_period", list(data.PERIODS))):
+        if ss.get(k) not in opts:
+            ss[k] = opts[0]
+    in_cat = tree[tree.CATEGORY == ss["sr_d_cat"]]
+    mfrs = sorted(in_cat.MANUFACTURER.unique())
+    ss["sr_d_mfr"] = [m for m in ss.get("sr_d_mfr") or [] if m in mfrs]
+    sub = in_cat[in_cat.MANUFACTURER.isin(ss["sr_d_mfr"])] if ss["sr_d_mfr"] else in_cat
+    brands = sorted(sub.BRAND.unique())
+    ss["sr_d_brand"] = [b for b in ss.get("sr_d_brand") or [] if b in brands]
+
+    with st.container(key="sr_side_filters"):
+        a, b = st.columns(2, gap="small")
+        a.selectbox("As-of week", wk_opts, key="sr_d_week", format_func=_week_label,
+                    help="Analyse the data as it stood at the end of this week (back to 2020).")
+        b.selectbox("Period", list(data.PERIODS), key="sr_d_period", format_func=lambda w: f"{w} weeks")
+        a, b = st.columns(2, gap="small")
+        a.selectbox("Category", cats, key="sr_d_cat")
+        b.selectbox("Market", ids, key="sr_d_market", format_func=labels.get,
+                    help="All India splits into regions; a region splits into its cities.")
+        a, b = st.columns(2, gap="small")
+        a.multiselect("Company", mfrs, key="sr_d_mfr", placeholder="All companies",
+                      format_func=lambda m: fmt.name(m, "MANUFACTURER"))
+        b.multiselect("Brand", brands, key="sr_d_brand", placeholder="All brands", format_func=fmt.name)
+        if st.button("Run analysis", icon=":material/play_circle:", type="primary", width="stretch",
+                     key="sr_btn_filters_run"):
+            ss["sr_f_week"], ss["sr_f_period"] = ss["sr_d_week"], ss["sr_d_period"]
+            ss["sr_f_cat"], ss["sr_f_market"] = ss["sr_d_cat"], ss["sr_d_market"]
+            ss["sr_f_mfr"], ss["sr_f_brand"] = list(ss["sr_d_mfr"]), list(ss["sr_d_brand"])
             st.rerun()
-        if data.filters_active():
-            run = data.run_for_week(f.as_of)
-            st.caption("Stored radar run for this week." if run else
-                       "No stored radar run for this week: Radar shows the nearest run; analysis pages use this week.")
-            if st.button("Reset filters", icon=":material/restart_alt:", key="sr_btn_filters_reset", width="stretch"):
+        with st.container(horizontal=True, vertical_alignment="center", key="sr_side_filters_head"):
+            if data.filters_active():
+                run = data.run_for_week(f.as_of)
+                st.caption("Stored radar run for this week." if run else
+                           "No stored radar run for this week: Radar shows the nearest run; analysis pages use this week.")
+            if st.button("Reset to default", icon=":material/restart_alt:", key="sr_btn_filters_reset", type="tertiary",
+                         disabled=not data.filters_active(), width="content"):
                 data.reset_filters()
                 st.rerun()
 

@@ -84,7 +84,7 @@ def _polarity(kinds: list[str]) -> tuple[alt.Color, alt.Stroke]:
 
 def _signed_bars(df: pd.DataFrame, cat: str, val: str, color: alt.Color, tooltip: list, sort: list | str,
                  x_title: str, stroke: alt.Stroke | None = None, emphasis: str | None = None,
-                 opacity=None) -> alt.LayerChart:
+                 opacity=None, height: int | None = None) -> alt.LayerChart:
     axis = alt.Axis(labelFontWeight=alt.ExprRef(f"datum.value == '{emphasis}' ? 600 : 400")) if emphasis else alt.Axis()
     y = alt.Y(f"{cat}:N", sort=sort, title=None, axis=axis)
     x = alt.X(f"{val}:Q", title=x_title, scale=alt.Scale(padding=40))   # room for the value labels at both ends
@@ -101,7 +101,7 @@ def _signed_bars(df: pd.DataFrame, cat: str, val: str, color: alt.Color, tooltip
         align="right", dx=-5, color=INK_2, fontSize=11, fontWeight=500).encode(
         y=y, x=f"{val}:Q", text=alt.Text(f"{val}:Q", format="+.2f"))
     zero = alt.Chart(pd.DataFrame({"x": [0.0]})).mark_rule(color=SLATE, strokeWidth=1).encode(x="x:Q")
-    return (bars + pos + neg + zero).properties(height=BAR_ROW * max(len(df), 1) + BAR_AXIS, width="container")
+    return (bars + pos + neg + zero).properties(height=height or BAR_ROW * max(len(df), 1) + BAR_AXIS, width="container")
 
 
 def bridge_bars(b: dict, highlight: str | None = None) -> alt.LayerChart:
@@ -345,8 +345,15 @@ def region_tile_map(df: pd.DataFrame, measure: str, measure_title: str, fmt: str
     return _theme((tiles + name + val).properties(height=330, width="container"))
 
 
-def heatmap_retailer_sku(df: pd.DataFrame, measure: str, measure_title: str, fmt: str, diverging: bool) -> alt.LayerChart:
-    """Retailer x SKU cells coloured by the measure, with the value printed in each cell and full details on hover."""
+def sku_heat_height(n_retailers: int) -> int:
+    """The natural plot height of heatmap_retailer_sku for this many retailers."""
+    return 46 * max(n_retailers, 1) + 70
+
+
+def heatmap_retailer_sku(df: pd.DataFrame, measure: str, measure_title: str, fmt: str, diverging: bool,
+                         height: int | None = None) -> alt.LayerChart:
+    """Retailer x SKU cells coloured by the measure, with the value printed in each cell and full details on hover.
+    height overrides the natural height, so the chart can line up with a neighbour."""
     df = df.copy()
     scale, df["DARK"] = _cell_scale(df[measure], diverging)
     base = alt.Chart(df).encode(x=alt.X("ITEM_DESC:N", title=None, axis=alt.Axis(labelAngle=-30, labelLimit=180)),
@@ -362,8 +369,12 @@ def heatmap_retailer_sku(df: pd.DataFrame, measure: str, measure_title: str, fmt
     text = base.mark_text(fontSize=11, fontWeight=500).encode(
         text=alt.Text(f"{measure}:Q", format=fmt),
         color=alt.condition("datum.DARK", alt.value(WHITE), alt.value(DEEP)), tooltip=tip)
-    rows = max(df.RETAILER.nunique(), 1)
-    return _theme((cells + text).properties(height=46 * rows + 70, width="container"))
+    return _theme((cells + text).properties(height=height or sku_heat_height(df.RETAILER.nunique()), width="container"))
+
+
+def sku_bars_height(n_skus: int) -> int:
+    """The natural plot height of sku_bars for this many SKUs."""
+    return BAR_ROW * max(n_skus, 1) + BAR_AXIS
 
 
 def heatmap_week_brand(df: pd.DataFrame, focus: str | None = None) -> alt.Chart:
@@ -381,15 +392,17 @@ def heatmap_week_brand(df: pd.DataFrame, focus: str | None = None) -> alt.Chart:
     ).properties(height=24 * max(df.BRAND.nunique(), 1) + 130, width="container"))   # + angled dates and legend
 
 
-def sku_bars(df: pd.DataFrame) -> alt.LayerChart:
-    """SKUs by sales change % across the selected retailers, gains and losses in the Radar polarity, signed labels."""
+def sku_bars(df: pd.DataFrame, height: int | None = None) -> alt.LayerChart:
+    """SKUs by sales change % across the selected retailers, gains and losses in the Radar polarity, signed labels.
+    height overrides the natural height, so the chart can line up with a neighbour."""
     d = df.copy()
     d["kind"] = ["gain" if v >= 0 else "loss" for v in d.SALES_CHG_PCT]
     color, stroke = _polarity(["gain", "loss"])
     tip = [alt.Tooltip("ITEM_DESC:N", title="SKU"), alt.Tooltip("SALES_CHG_PCT:Q", title="Change %", format="+.1f"),
            alt.Tooltip("VALUE_SALES:Q", title="Value sales, last 4 weeks", format=",.0f"),
            alt.Tooltip("VALUE_SALES_BEFORE:Q", title="4 weeks before", format=",.0f")]
-    return _theme(_signed_bars(d, "ITEM_DESC", "SALES_CHG_PCT", color, tip, "-x", "Value sales change, %", stroke))
+    return _theme(_signed_bars(d, "ITEM_DESC", "SALES_CHG_PCT", color, tip, "-x", "Value sales change, %", stroke,
+                               height=height))
 
 
 # ---- Insight Studio: interactive Plotly charts (SR-065) ----------------------------------------------------------
@@ -405,8 +418,12 @@ PLOTLY_CONFIG = {"displaylogo": False, "scrollZoom": True,
 
 def _pl(fig, height: int = 380, title: str | None = None, legend: bool = True):
     """The house style for a Plotly figure: Inter, deep-teal ink, sea-glass grid, transparent background, drawn shapes in
-    gold, and the legend on top."""
-    fig.update_layout(height=height, margin=dict(l=8, r=8, t=40 if title else 16, b=8), title=dict(text=title or ""),
+    gold, and the legend on top. Text placed above the plot (reference-line labels, corner notes) gets a taller top
+    margin, so it is never cut off."""
+    above = any(a.y is not None and a.y >= 1 and str(a.yref or "").endswith(("paper", "domain"))
+                for a in fig.layout.annotations or ())
+    fig.update_layout(height=height, margin=dict(l=8, r=8, t=40 if title else (34 if above else 16), b=8),
+                      title=dict(text=title or ""),
                       font=dict(family=FONT, size=12, color=DEEP), paper_bgcolor="rgba(0,0,0,0)",
                       plot_bgcolor="rgba(0,0,0,0)", hoverlabel=dict(font_family=FONT, bgcolor=WHITE),
                       legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, title=None) if legend else None,
@@ -417,9 +434,11 @@ def _pl(fig, height: int = 380, title: str | None = None, legend: bool = True):
     return fig
 
 
-def pl_explore(df: pd.DataFrame, kind: str, x: str, y: str, color: str | None, y_title: str, height: int = 420):
+def pl_explore(df: pd.DataFrame, kind: str, x: str, y: str, color: str | None, y_title: str, height: int = 420,
+               x_title: str | None = None):
     """Workbench chart from an aggregated frame (x, y, optional colour, ROW_ID). Every mark carries its ROW_ID in
-    customdata, so a box or lasso selection maps back to rows. kind: Line, Bar, Area, Scatter, Box, Heatmap."""
+    customdata, so a box or lasso selection maps back to rows. kind: Line, Bar, Area, Scatter, Box, Heatmap.
+    x_title names the x axis (left blank when the values speak for themselves, such as weeks)."""
     import plotly.graph_objects as go
     fig = go.Figure()
     groups = [(None, df)] if not color else list(df.groupby(color, sort=False))
@@ -448,6 +467,8 @@ def pl_explore(df: pd.DataFrame, kind: str, x: str, y: str, color: str | None, y
     if kind == "Bar":
         fig.update_layout(barmode="group")
     fig.update_yaxes(title=y_title)
+    if x_title:
+        fig.update_xaxes(title=x_title)
     return _pl(fig, height, legend=bool(color))
 
 
@@ -505,23 +526,34 @@ def pl_bars_h(df: pd.DataFrame, label: str, value: str, title: str, err: str | N
                            textposition="outside", cliponaxis=False,
                            hovertemplate=f"%{{y}}<br>{title}: %{{x:{fmt}}}<extra></extra>"))
     fig.update_xaxes(title=title, zeroline=True)
-    return _pl(fig, height or max(180, 44 * len(d) + 60), legend=False)
+    return _pl(fig, height or bars_h_height(len(d)), legend=False)
 
 
-def pl_curves(curves: dict[str, pd.DataFrame], labels: dict[str, str], y_title: str):
-    """Partial dependence: one small panel per driver, the model's average prediction as that driver moves."""
+def bars_h_height(n: int) -> int:
+    """The natural height of pl_bars_h for n bars, so a neighbouring chart can match it."""
+    return max(180, 44 * n + 60)
+
+
+def heat_height(n_rows: int) -> int:
+    """The natural height of pl_heat for n rows, so a neighbouring chart can match it."""
+    return max(260, 46 * n_rows + 80)
+
+
+def pl_curves(curves: dict[str, pd.DataFrame], labels: dict[str, str], y_title: str, height: int = 320):
+    """Partial dependence: one small panel per driver, the model's average prediction as that driver moves. Each
+    driver is named under its own panel (as the x-axis title), so long names are never cut off at the top."""
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     names = list(curves)
-    fig = make_subplots(rows=1, cols=max(1, len(names)), subplot_titles=[labels.get(n, n) for n in names],
-                        shared_yaxes=True)
+    fig = make_subplots(rows=1, cols=max(1, len(names)), shared_yaxes=True, horizontal_spacing=0.06)
     for i, n in enumerate(names, 1):
         c = curves[n]
         fig.add_trace(go.Scatter(x=c.X, y=c.Y, mode="lines", line=dict(color=CAT[i - 1], width=2.5), name=labels.get(n, n),
                                  hovertemplate=f"{labels.get(n, n)}: %{{x:,.2f}}<br>{y_title}: %{{y:,.2f}}<extra></extra>"),
                       row=1, col=i)
+        fig.update_xaxes(title=dict(text=labels.get(n, n), font=dict(size=12, color=DEEP)), automargin=True, row=1, col=i)
     fig.update_yaxes(title=y_title, row=1, col=1)
-    return _pl(fig, 300, legend=False)
+    return _pl(fig, height, legend=False)
 
 
 def pl_segments(points: pd.DataFrame, x: str, y: str, x_title: str, y_title: str):
@@ -553,7 +585,7 @@ def pl_heat(matrix: pd.DataFrame, title: str, diverging: bool = True, fmt: str =
                                text=[[format(v, fmt) if v == v else "" for v in row] for row in z],
                                texttemplate="%{text}", colorbar=dict(title=title),
                                hovertemplate="%{y} · %{x}<br>" + title + ": %{z:" + fmt + "}<extra></extra>"))
-    return _pl(fig, height or max(260, 46 * len(matrix) + 80), legend=False)
+    return _pl(fig, height or heat_height(len(matrix)), legend=False)
 
 
 def pl_pareto(df: pd.DataFrame, title: str, money: str = ""):
@@ -574,11 +606,12 @@ def pl_pareto(df: pd.DataFrame, title: str, money: str = ""):
 def pl_risk(shifts: pd.DataFrame, names: dict, money: str = "", focus: str | None = None, high: float = 0.8):
     """The director's risk matrix: each shift in the run at its confidence (x) and value at stake (y), sized by the share
     move, teal for gains and terracotta for losses, the focus shift outlined in gold. The "Act now" line sits at
-    `high`, the confidence where format.confidence starts saying High. Not selectable (B21); the page offers a picker."""
+    `high`, the confidence where format.confidence starts saying High. Not selectable (B21); the page offers a picker.
+    Shift names show on hover only: printed on the bubbles they overlap and cannot be read."""
     import plotly.graph_objects as go
     d = shifts.assign(ABS=shifts.VALUE_AT_STAKE.abs(), MOVE=shifts.D_SHARE_PTS.abs())
     fig = go.Figure(go.Scatter(
-        x=d.CONFIDENCE, y=d.ABS, mode="markers+text", text=[names.get(s, s) for s in d.SHIFT_ID], textposition="top center",
+        x=d.CONFIDENCE, y=d.ABS, mode="markers", text=[names.get(s, s) for s in d.SHIFT_ID],
         customdata=d.SHIFT_ID, marker=dict(size=18 + 28 * (d.MOVE / max(d.MOVE.max(), 1e-9)),
                                            color=[TERRA if v < 0 else TEAL for v in d.D_SHARE_PTS], opacity=0.8,
                                            line=dict(color=[GOLD if s == focus else WHITE for s in d.SHIFT_ID],
@@ -586,9 +619,10 @@ def pl_risk(shifts: pd.DataFrame, names: dict, money: str = "", focus: str | Non
         hovertemplate="%{text}<br>Confidence %{x:.2f}<br>Value at stake %{y:,.0f}" + (f" {money}" if money else "")
                       + "<extra></extra>"))
     fig.add_vline(x=high, line=dict(color=SEA, dash="dot"))
-    fig.add_annotation(x=1.0, y=1.0, xref="paper", yref="paper", text="Act now", showarrow=False, font=dict(color=TERRA))
+    fig.add_annotation(x=1.0, y=1.0, xref="paper", yref="paper", text="Act now", showarrow=False, font=dict(color=TERRA),
+                       xanchor="right", yanchor="bottom")
     fig.add_annotation(x=0.0, y=1.0, xref="paper", yref="paper", text="Verify first", showarrow=False, font=dict(color=SLATE),
-                       xanchor="left")
+                       xanchor="left", yanchor="bottom")
     fig.update_xaxes(title="Confidence (stored)", range=[0, 1.1])
     fig.update_yaxes(title="Value at stake" + (f" ({money})" if money else ""), range=[0, 1.22 * float(d.ABS.max() or 1)])
     return _pl(fig, 420, legend=False)
@@ -611,13 +645,14 @@ def pl_hist(values: pd.Series, title: str, marks: dict[str, float] | None = None
 
 def pl_fair_share(rep: pd.DataFrame, focus: str | None = None):
     """Value share (y) against share of distribution points (x) per brand, with the fair-share line y = x: above it a
-    brand sells more than its shelf presence, below it less. Bubble size is value sales; the focus brand is ringed."""
+    brand sells more than its shelf presence, below it less. Bubble size is value sales; the focus brand is ringed.
+    Brand names show on hover only: printed on the bubbles they overlap and cannot be read."""
     import plotly.graph_objects as go
     m = float(max(rep.SHARE.max(), rep.TDP_SHARE.max()) * 1.15)
     fig = go.Figure([go.Scatter(x=[0, m], y=[0, m], mode="lines", line=dict(color=SEA, dash="dot"), name="Fair share",
                                 hoverinfo="skip")])
     size = 14 + 30 * (rep.SALES / rep.SALES.max()) ** 0.5
-    fig.add_trace(go.Scatter(x=rep.TDP_SHARE, y=rep.SHARE, mode="markers+text", text=rep.BRAND, textposition="top center",
+    fig.add_trace(go.Scatter(x=rep.TDP_SHARE, y=rep.SHARE, mode="markers", text=rep.BRAND,
                              marker=dict(size=size, color=[TERRA if i < 100 else TEAL for i in rep.FAIR_SHARE_INDEX],
                                          opacity=0.8, line=dict(color=[GOLD if b == focus else WHITE for b in rep.BRAND],
                                                                 width=[4 if b == focus else 1 for b in rep.BRAND])),
