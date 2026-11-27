@@ -10,6 +10,7 @@ the Cortex agents. Optional: CHIPPY_ROLE, CHIPPY_WAREHOUSE. No credentials are r
 """
 import os
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -87,8 +88,18 @@ def live() -> bool:
     return os.environ.get("CHIPPY_MODE", "").strip().lower() == "live"
 
 
+_SESSION_LOCK = threading.Lock()
+
+
 def _live_session():
-    """One Snowpark session per process; sr_ui.data.session() finds it through get_active_session()."""
+    """One Snowpark session per process; sr_ui.data.session() finds it through get_active_session(). The lock stops two
+    browser sessions that open at the same moment from each creating one: with two active sessions,
+    get_active_session() fails and every query in the app errors until it restarts."""
+    with _SESSION_LOCK:
+        return _get_or_create_session()
+
+
+def _get_or_create_session():
     from snowflake.snowpark import Session
     from snowflake.snowpark.context import get_active_session
 

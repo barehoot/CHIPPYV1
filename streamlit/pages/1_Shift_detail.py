@@ -745,6 +745,7 @@ SKU_MEASURES = {
     "Value sales": ("VALUE_SALES", "Value sales, last 4 weeks", ",.0f", False),
     "ACV distribution %": ("ACV_DIST_PCT", "ACV distribution %", ".0f", False),
 }
+SKU_HEAT_EXTRA, SKU_BARS_EXTRA = 80, 50      # px each SKU card adds around its chart (the heading lines)
 
 
 def sku_view() -> None:
@@ -776,23 +777,31 @@ def sku_view() -> None:
                 ("south_east", "Weakest SKU", f"{lo.SALES_CHG_PCT:+.1f}%", _sign(lo.SALES_CHG_PCT), str(lo.ITEM_DESC)),
                 (best_i, best_k, f"{hi.SALES_CHG_PCT:+.1f}%", _sign(hi.SALES_CHG_PCT), str(hi.ITEM_DESC)),
                 ("store", "ACV distribution", f"{acv.min():.0f}–{acv.max():.0f}%" if len(acv) else "–", "", "lowest to highest")])
-    with nav.card("sku_heat"):
-        nav.section("SKUs by retailer", "Each cell is one SKU at one retailer. Hover a cell for its numbers.")
-        st.altair_chart(charts.heatmap_retailer_sku(k, col, title, f, div), width="stretch")
-    with nav.stack("sku_lower"):
-        left, right = st.columns(2)
-        with left, nav.card("sku_bars"):
+    # Both SKU charts grow with the SKUs, so they sit side by side and are sized to the taller one: neither card leaves
+    # empty space. The brand-by-week heatmap (26 weeks wide) gets the full width below them.
+    # A chart's height includes its axes and legend; around it the heatmap card adds a two-line heading
+    # (SKU_HEAT_EXTRA) and the bar card a one-line heading (SKU_BARS_EXTRA).
+    bars = agg.dropna(subset=["SALES_CHG_PCT"])
+    heat_h = charts.sku_heat_height(k.RETAILER.nunique())
+    total = max(heat_h + SKU_HEAT_EXTRA, charts.sku_bars_height(len(bars)) + SKU_BARS_EXTRA)
+    with nav.stack("sku_upper"):
+        left, right = st.columns([3, 2])
+        with left, nav.card("sku_heat"):
+            nav.section("SKUs by retailer", "Each cell is one SKU at one retailer. Hover a cell for its numbers.")
+            st.altair_chart(charts.heatmap_retailer_sku(k, col, title, f, div, height=total - SKU_HEAT_EXTRA),
+                            width="stretch")
+        with right, nav.card("sku_bars"):
             st.subheader("SKU change")
-            st.altair_chart(charts.sku_bars(agg.dropna(subset=["SALES_CHG_PCT"])), width="stretch")
-        with right, nav.card("brand_heat"):
-            st.subheader("Brand share, week by week")
-            b = data.brand_share_weeks(s["MARKET_ID"], s["CATEGORY"], 26)
-            if b.empty:
-                st.caption("No weekly share history.")
-            else:
-                b = b.assign(WEEK_END_DATE=pd.to_datetime(b.WEEK_END_DATE), BRAND=[fmt.name(x) for x in b.BRAND])
-                st.altair_chart(charts.heatmap_week_brand(b, fmt.name(s["BRAND"])), width="stretch")
-                st.caption(f"{markets.get(s['MARKET_ID'], s['MARKET_ID'])}, last 26 weeks. Darker is a higher share.")
+            st.altair_chart(charts.sku_bars(bars, height=total - SKU_BARS_EXTRA), width="stretch")
+    with nav.card("brand_heat"):
+        st.subheader("Brand share, week by week")
+        b = data.brand_share_weeks(s["MARKET_ID"], s["CATEGORY"], 26)
+        if b.empty:
+            st.caption("No weekly share history.")
+        else:
+            b = b.assign(WEEK_END_DATE=pd.to_datetime(b.WEEK_END_DATE), BRAND=[fmt.name(x) for x in b.BRAND])
+            st.altair_chart(charts.heatmap_week_brand(b, fmt.name(s["BRAND"])), width="stretch")
+            st.caption(f"{markets.get(s['MARKET_ID'], s['MARKET_ID'])}, last 26 weeks. Darker is a higher share.")
     with nav.card("sku_detail"):
         nav.section("SKU detail", "The rows behind the heatmap. Sort by any column; download from the table's menu.")
         st.dataframe(nav.striped(pd.DataFrame({

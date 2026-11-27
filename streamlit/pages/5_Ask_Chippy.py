@@ -22,33 +22,33 @@ agents = data.AGENTS
 AUTO = "AUTO"
 OPTIONS = [AUTO] + list(agents)
 
-# What each choice is for, shown on its card. Tools are the agent's own tool names (sql/50_sem/504, 506 and 507).
+# What each choice is for, shown on its card: "spec" is the one-line specialization under the examples.
 CARDS = {
     AUTO: {"label": "Auto", "pose": "hello_mix", "tag": "Smart routing",
            "purpose": "Picks the best agent for each question (Chippy, Data analyst, Geo or a specialist) and shows you why. Switch any answer with one click.",
-           "best": ["Not sure who to ask", "Mixed questions"], "tools": ["keyword rule · no AI"]},
+           "best": ["Not sure who to ask", "Mixed questions"],
+           "spec": "Sending each question to the right specialist"},
     agent_router.CHIPPY: {"pose": "hero_mix", "tag": "Ask-Why",
                           "best": ["Why share moved", "Who took it", "Real or a data effect", "What if"],
-                          "tools": ["get_share_bridge", "share_flow", "check_artefact", "what_if", "latest_brief",
-                                    "city_breakdown", "yearly_trend"]},
+                          "spec": "Explaining why share moved and who took it"},
     agent_router.ANALYST: {"pose": "think_mix", "tag": "Tables",
                            "best": ["Rankings", "Comparisons", "Sales by retailer", "Trends over time"],
-                           "tools": ["data_analyst", "method_search"]},
+                           "spec": "Rankings, comparisons and trend tables"},
     agent_router.GEO: {"pose": "think_mix", "tag": "Cities & years",
                        "best": ["Which cities drove it", "Region breakdowns", "Trends since 2020"],
-                       "tools": ["city_breakdown", "yearly_trend", "share_analyst", "method_search"]},
+                       "spec": "City and regional performance since 2020"},
     agent_router.RECOVERY: {"pose": "hero_mix", "tag": "Action plan",
                             "best": ["How to win share back", "Where to act first", "What recovery is worth"],
-                            "tools": ["get_share_bridge", "city_breakdown", "share_flow", "what_if", "check_artefact"]},
+                            "spec": "Plans to win lost share back"},
     agent_router.PRICE: {"pose": "think_mix", "tag": "Price & promo",
                          "best": ["Price gaps", "Price rises", "Promo depth and lift"],
-                         "tools": ["price_promo", "get_share_bridge", "share_analyst"]},
+                         "spec": "Price gaps, price changes and promotions"},
     agent_router.RISK: {"pose": "think_mix", "tag": "Early warning",
                         "best": ["What could go wrong", "Projected share", "Seasonal or new"],
-                        "tools": ["risk_outlook", "yearly_trend", "latest_brief"]},
+                        "spec": "Early warnings and projected share"},
     agent_router.COMPETITOR: {"pose": "think_mix", "tag": "Benchmark",
                               "best": ["Company vs rivals", "League table", "Where we win or lose"],
-                              "tools": ["benchmark", "share_flow", "share_analyst"]},
+                              "spec": "Benchmarking against competitors"},
 }
 
 
@@ -73,21 +73,24 @@ def _new_chat(choice: str) -> dict:
 
 
 def page_header() -> str:
-    """The Radar header with the compact agent switcher (Auto, Chippy, Data analyst) and New chat."""
+    """The Radar header: title and New chat on one row, the agent switcher (Auto and every agent) on its own row below,
+    so the eight choices have the full width and never overlap."""
     with st.container(key="sr_radar_header"):
-        title, controls = st.columns([2, 3], vertical_alignment="center")
+        title, controls = st.columns([3, 1], vertical_alignment="center")
         title.html('<div class="sr-radar-title"><h1>Ask Chippy</h1>'
                    '<p>Questions about share shifts, answered with the exact numbers</p></div>')
         with controls.container(horizontal=True, horizontal_alignment="right", vertical_alignment="center", gap="small"):
-            a = st.radio("Agent", OPTIONS, key="chat_agent", horizontal=True,
-                         format_func=lambda x: ("✦ " if x == AUTO else "") + _label(x), label_visibility="collapsed",
-                         width="content", help=" · ".join(f"{_label(v)}: {_purpose(v)}" for v in OPTIONS)) or data.AGENT
-            if st.button("New chat", icon=":material/add_comment:", key="sr_btn_newchat"):
-                st.session_state.chats[a] = _new_chat(a)
-                st.session_state.pop("sr_ask_pending", None)
-                st.rerun()
+            new = st.button("New chat", icon=":material/add_comment:", key="sr_btn_newchat")
             if nav.is_admin():
                 st.html('<span class="sr-radar-admin">Admin</span>', width="content")
+        with st.container(key="sr_ask_switch"):
+            a = st.radio("Agent", OPTIONS, key="chat_agent", horizontal=True,
+                         format_func=lambda x: ("✦ " if x == AUTO else "") + _label(x), label_visibility="collapsed",
+                         help=" · ".join(f"{_label(v)}: {_purpose(v)}" for v in OPTIONS)) or data.AGENT
+    if new:
+        st.session_state.chats[a] = _new_chat(a)
+        st.session_state.pop("sr_ask_pending", None)
+        st.rerun()
     return a
 
 
@@ -338,12 +341,12 @@ def agent_cards() -> None:
                 agent_router.PRICE: "price", agent_router.RISK: "risk",
                 agent_router.COMPETITOR: "competitor"}.get(opt, "analyst")
         with col, st.container(key=f"sr_agent_card_{slug}{'_on' if on else ''}"):
-            pic = nav.pulse_img(info["pose"], _label(opt), 64, animate=on)
-            st.html(f'<div class="sr-agent-card-body">{pic}<div class="sr-agent-name">{escape(_label(opt))}'
-                    f'<em>{escape(info["tag"])}</em></div><p>{escape(_purpose(opt))}</p>'
+            pic = nav.pulse_img(info["pose"], _label(opt), 44, animate=on)
+            st.html(f'<div class="sr-agent-card-body"><div class="sr-agent-top">{pic}<div class="sr-agent-name">'
+                    f'{escape(_label(opt))}<em>{escape(info["tag"])}</em></div></div><p>{escape(_purpose(opt))}</p>'
                     '<div class="sr-agent-best">' + "".join(f"<span>{escape(b)}</span>" for b in info["best"]) + "</div>"
-                    '<div class="sr-agent-tools"><span class="sr-ico" aria-hidden="true">build</span><span>'
-                    + escape(", ".join(info["tools"])) + "</span></div></div>")
+                    '<div class="sr-agent-spec"><span class="sr-ico" aria-hidden="true">workspace_premium</span><span>'
+                    f'<b>Specializes in</b> {escape(info["spec"])}</span></div></div>')
             st.button("Selected" if on else f"Choose {_label(opt)}", key=f"sr_agent_pick_{slug}", width="stretch",
                       icon=":material/check_circle:" if on else ":material/radio_button_unchecked:",
                       type="primary" if on else "secondary", disabled=on, on_click=_choose, args=(opt,))

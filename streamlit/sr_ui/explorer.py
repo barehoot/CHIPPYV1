@@ -38,10 +38,9 @@ def render() -> None:
     if snap.empty:
         st.info(f"No {f.category} sales in {where} in the {f.weeks} weeks to {f.as_of}.", icon=":material/info:")
         return
-    if f.manufacturer:
-        snap_c = snap[snap.MANUFACTURER == f.manufacturer]
-    else:
-        snap_c = snap
+    snap_c = snap[snap.MANUFACTURER.isin(f.manufacturers)] if f.manufacturers else snap
+    if f.brands:                                   # several brands chosen in the sidebar: pick among those
+        snap_c = snap_c[snap_c.BRAND.isin(f.brands)] if snap_c.BRAND.isin(f.brands).any() else snap[snap.BRAND.isin(f.brands)]
     brands = list(snap_c.BRAND) or list(snap.BRAND)
     focus = f.brand if f.brand in brands else st.selectbox("Brand", brands, format_func=fmt.name, key="sr_ex_brand")
     row = snap[snap.BRAND == focus].iloc[0]
@@ -81,8 +80,8 @@ def render() -> None:
             st.caption("No lower-level markets under this market.")
 
     with nav.card("sr_ex_table"):
-        nav.section("Competitive benchmark", "Every brand in this market and period; your company first when one is chosen")
-        mine = snap.MANUFACTURER == f.manufacturer if f.manufacturer else pd.Series(False, index=snap.index)
+        nav.section("Competitive benchmark", "Every brand in this market and period; your companies first when chosen")
+        mine = snap.MANUFACTURER.isin(f.manufacturers) if f.manufacturers else pd.Series(False, index=snap.index)
         shown = pd.concat([snap[mine], snap[~mine]])
         st.dataframe(nav.striped(pd.DataFrame({
             "Brand": shown.BRAND.map(fmt.name), "Company": shown.MANUFACTURER.map(lambda m: fmt.name(m, "MANUFACTURER")),
