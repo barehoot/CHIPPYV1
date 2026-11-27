@@ -18,7 +18,10 @@ CMP_CODES     = {"L4W_VS_YA", "L4W_VS_PP", "L12W_VS_YA", "L52W_VS_YA"}
 GAIN_WORDS = {"gain", "gained", "gains", "grew", "grows", "rose", "up", "increased", "won", "added"}
 LOSS_WORDS = {"lost", "lose", "loses", "loss", "fell", "down", "declined", "dropped", "slipped", "ceded"}
 SHIFT_FIELDS = ("shift_id", "title", "why", "so_what", "next_question")
-MAX_LEN = {"title": 120, "why": 400, "headline": 200}
+ACTION_FIELDS = ("diagnosis", "action", "impact")        # optional per shift: checked when present
+MAX_LEN = {"title": 120, "why": 400, "headline": 200, "diagnosis": 500, "action": 600, "impact": 300}
+# Wording the system prints itself, removed before the raw-number check: ISO dates and "<n> weeks"/"<n>-week" periods
+DATE_OR_PERIOD = re.compile(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,3}[- ]weeks?\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,8 @@ def _texts(llm: dict) -> list[tuple[str, str]]:
     out = [("headline", llm["headline"])]
     for i, s in enumerate(llm["shifts"]):
         out += [(f"shifts[{i}].{k}", s[k]) for k in SHIFT_FIELDS if k != "shift_id"]
+        out += [(f"shifts[{i}].{k}", s[k]) for k in ACTION_FIELDS if isinstance(s.get(k), str)]
+    out += [(f"priorities[{i}]", p) for i, p in enumerate(llm.get("priorities") or []) if isinstance(p, str)]
     out += [(f"watchlist[{i}]", w) for i, w in enumerate(llm["watchlist"])]
     return out
 
@@ -117,7 +122,7 @@ def validate_brief(llm: dict, pack: dict) -> list[Violation]:
 
     allowed = allowed_tokens(pack)
     for path, text in texts:
-        for tok in DIGIT_TOKEN.findall(PLACEHOLDER.sub(" ", text)):
+        for tok in DIGIT_TOKEN.findall(DATE_OR_PERIOD.sub(" ", PLACEHOLDER.sub(" ", text))):
             if tok not in allowed and _clean(tok) not in allowed:
                 v.append(Violation("V03_RAW_NUMBER", path, f"raw number '{tok}'"))
 

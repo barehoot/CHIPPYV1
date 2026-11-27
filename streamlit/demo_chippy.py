@@ -1,5 +1,5 @@
-"""Local demo of CHIPPY (the read-only app) with sample data. No Snowflake needed.
-Run from the project folder:  streamlit run streamlit/demo_chippy.py"""
+"""Local run of CHIPPY (the read-only app). Sample data by default, no Snowflake needed; with CHIPPY_MODE=live it reads
+Snowflake and asks the Cortex agents (see demo/demo_data.py). Run from the project folder:  streamlit run streamlit/demo_chippy.py"""
 import runpy
 import sys
 from pathlib import Path

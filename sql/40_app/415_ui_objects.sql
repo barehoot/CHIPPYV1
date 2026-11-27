@@ -9,6 +9,16 @@ AS
 SELECT WEEK_END_DATE, MARKET_ID, CATEGORY, MANUFACTURER, BRAND, VALUE_SHARE, DIST_SHARE, PRICE_INDEX, PROMO_INDEX
 FROM SR_DB.CORE.DT_SHARE_WEEK;
 
+-- City points for the Radar Market View; SR_UI reads this view, never the dynamic table
+CREATE OR REPLACE VIEW SR_DB.APP.V_UI_CITY_SHARE
+COMMENT = 'Share change per city market with region, state and coordinates, for the Market View map'
+AS
+SELECT c.CMP_CODE, c.MARKET_ID, m.MARKET_NAME, m.REGION, m.CITY, m.STATE, m.STATE_CODE, m.LATITUDE, m.LONGITUDE,
+       c.CATEGORY, c.MANUFACTURER, c.BRAND, c.SH1, c.SH0, c.D_SHARE, c.VALUE_AT_STAKE
+FROM SR_DB.CORE.DT_SHARE_COMPARE c
+JOIN SR_DB.SRC.V_SRC_MARKET m ON m.MARKET_ID = c.MARKET_ID
+WHERE m.MARKET_LEVEL = 'CITY' AND m.LATITUDE IS NOT NULL AND m.LONGITUDE IS NOT NULL;
+
 -- Stable display aliases, used when DISPLAY_ALIAS = true. SP_WRITE_BRIEF reads the same view, so app and brief agree.
 CREATE OR REPLACE VIEW SR_DB.APP.V_ALIAS
 COMMENT = 'Brand A, Brand B ... and Maker A ... by L52W sales in the parent market'

@@ -80,6 +80,80 @@ def scope_key() -> str:
     return f"{cfg('SCOPE_CATEGORY')}|{cfg('SCOPE_PARENT_MARKET')}|{cfg('FOCUS_MANUFACTURER')}"
 
 
+# ---- Sidebar filters (session state; defaults are the configured scope, so nothing changes until a viewer picks) ----
+
+PERIODS = (4, 12, 26, 52, 104)
+_F_KEYS = ("sr_f_week", "sr_f_cat", "sr_f_mfr", "sr_f_brand", "sr_f_market", "sr_f_period")
+
+
+@dataclass(frozen=True)
+class Filters:
+    as_of: str              # ISO week-end date the analysis looks back from (never after AS_OF_WEEK_END)
+    category: str
+    manufacturer: str | None
+    brand: str | None
+    market_id: str          # TOTAL, a region or a city
+    weeks: int              # analysis period
+
+
+def filters() -> Filters:
+    ss = st.session_state
+    week = ss.get("sr_f_week") or str(cfg("AS_OF_WEEK_END"))
+    return Filters(as_of=str(week), category=ss.get("sr_f_cat") or str(cfg("SCOPE_CATEGORY")),
+                   manufacturer=ss.get("sr_f_mfr", cfg("FOCUS_MANUFACTURER")) or None,
+                   brand=ss.get("sr_f_brand") or None,
+                   market_id=ss.get("sr_f_market") or str(cfg("SCOPE_PARENT_MARKET")),
+                   weeks=int(ss.get("sr_f_period") or 4))
+
+
+def filters_active() -> bool:
+    """True when the viewer moved any filter away from the configured scope."""
+    f = filters()
+    return (f.as_of != str(cfg("AS_OF_WEEK_END")) or f.category != str(cfg("SCOPE_CATEGORY"))
+            or f.manufacturer != (cfg("FOCUS_MANUFACTURER") or None) or f.brand is not None
+            or f.market_id != str(cfg("SCOPE_PARENT_MARKET")))
+
+
+def reset_filters() -> None:
+    for k in _F_KEYS:
+        st.session_state.pop(k, None)
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def filter_weeks() -> list[str]:
+    """Every data week up to the replay position, newest first (2020 onwards)."""
+    df = q("SELECT TO_VARCHAR(WEEK_END_DATE) AS W FROM SR_DB.APP.V_UI_WEEKS WHERE WEEK_END_DATE <= TRY_TO_DATE(?) "
+           "ORDER BY WEEK_END_DATE DESC", [str(cfg("AS_OF_WEEK_END"))])
+    return list(df.W)
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def product_tree() -> pd.DataFrame:
+    return q("SELECT CATEGORY, MANUFACTURER, BRAND FROM SR_DB.APP.V_UI_PRODUCT_TREE ORDER BY CATEGORY, MANUFACTURER, BRAND")
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def market_tree() -> pd.DataFrame:
+    return q("SELECT MARKET_ID, MARKET_NAME, MARKET_LEVEL, PARENT_MARKET_ID, REGION, CITY FROM SR_DB.SRC.V_SRC_MARKET "
+             "ORDER BY IFF(MARKET_LEVEL = 'TOTAL', 0, 1), REGION, IFF(MARKET_LEVEL = 'CITY', 1, 0), MARKET_NAME")
+
+
+def _children_clause(alias: str = "s") -> tuple[str, list]:
+    """SQL condition and binds for the markets the filtered market splits into: its children when it has any
+    (All India -> regions, a region -> its cities), else the market itself. The SQL text is fixed; only binds vary."""
+    m = filters().market_id
+    tree = market_tree()
+    if (tree.PARENT_MARKET_ID == m).any():
+        return f"{alias}.MARKET_ID IN (SELECT MARKET_ID FROM SR_DB.SRC.V_SRC_MARKET WHERE PARENT_MARKET_ID = ?)", [m]
+    return f"{alias}.MARKET_ID = ?", [m]
+
+
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def _qc(sql: str, params: tuple) -> pd.DataFrame:
+    """Cached read keyed by its SQL and binds, so a filter change (week, market) is a new cache entry."""
+    return q(sql, list(params))
+
+
 def viewer_name() -> str | None:
     """Kept in this viewer's session, never in the shared cache: on a shared (container) runtime a cached value would
     show one viewer's name to everyone."""
@@ -110,6 +184,15 @@ def total_market_name(market_id: str) -> str | None:
     return row["MARKET_NAME"] if row else None
 
 
+@st.cache_data(ttl=TTL_S, show_spinner=False)
+def city_shares(cmp_code: str, category: str, brand: str) -> pd.DataFrame:
+    """City markets with coordinates for one brand and comparison (Market View points)."""
+    return q("""SELECT MARKET_ID, CITY, REGION, STATE, STATE_CODE, LATITUDE, LONGITUDE, SH1, SH0, D_SHARE, VALUE_AT_STAKE
+                FROM SR_DB.APP.V_UI_CITY_SHARE
+                WHERE CMP_CODE = ? AND CATEGORY = ? AND BRAND = ?
+                ORDER BY CITY""", [cmp_code, category, brand])
+
+
 # ---- Runs (not cached: they drive the progress panel) ---------------------------------------------------------
 
 _RUN_COLS = ("RUN_ID, TRIGGER_TYPE, AS_OF_WEEK, SCOPE_KEY, STATUS, BRIDGE_MODE, N_CANDIDATES, N_RANKED, BRIEF_ID, "
@@ -124,10 +207,17 @@ def _run(row: dict | None) -> Run | None:
 
 
 def current_run() -> Run | None:
-    """The newest SUCCEEDED run, preferring the current as-of week and scope."""
+    """The newest SUCCEEDED run, preferring the sidebar's as-of week (default: the configured week) and scope."""
+    week = st.session_state.get("sr_f_week") or str(cfg("AS_OF_WEEK_END"))
     return _run(_one(f"SELECT {_RUN_COLS} FROM SR_DB.OPS.RUN_LOG WHERE STATUS = 'SUCCEEDED' "
-                     "ORDER BY IFF(AS_OF_WEEK = TRY_TO_DATE(?) AND SCOPE_KEY = ?, 0, 1), STARTED_AT DESC LIMIT 1",
-                     [str(cfg("AS_OF_WEEK_END")), scope_key()]))
+                     "ORDER BY IFF(AS_OF_WEEK = TRY_TO_DATE(?), 0, 1), IFF(SCOPE_KEY = ?, 0, 1), STARTED_AT DESC LIMIT 1",
+                     [str(week), scope_key()]))
+
+
+def run_for_week(week: str) -> Run | None:
+    """The newest successful stored run for that as-of week, or None (the analysis views still cover the week)."""
+    return _run(_one(f"SELECT {_RUN_COLS} FROM SR_DB.OPS.RUN_LOG WHERE STATUS = 'SUCCEEDED' AND AS_OF_WEEK = TRY_TO_DATE(?) "
+                     "ORDER BY STARTED_AT DESC LIMIT 1", [str(week)]))
 
 
 def latest_attempt() -> Run | None:
@@ -162,13 +252,31 @@ def task_last_run(task: str) -> dict | None:
 # ---- Radar (cached) -------------------------------------------------------------------------------------------
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)
-def shifts(run_id: str) -> pd.DataFrame:
+def _shifts(run_id: str) -> pd.DataFrame:
     return q("""SELECT r.SHIFT_ID, r.RANK_NO, r.CMP_CODE, r.MARKET_ID, r.CATEGORY, r.MANUFACTURER, r.BRAND, r.IS_FOCUS,
                        c.SH1, c.SH0, 100 * r.D_SHARE AS D_SHARE_PTS, r.VALUE_AT_STAKE, c.Z_SCORE, c.ANOMALY_CONFIRMED,
                        r.CONFIDENCE, r.ARTEFACT_LABEL, r.SCORE, r.SUPPRESSED, r.SUPPRESS_REASON, r.SELECTED
                 FROM SR_DB.APP.SHIFT_RANKED r
                 JOIN SR_DB.APP.SHIFT_CANDIDATE c ON c.RUN_ID = r.RUN_ID AND c.SHIFT_ID = r.SHIFT_ID
                 WHERE r.RUN_ID = ? ORDER BY r.SELECTED DESC, r.SCORE DESC""", [run_id])
+
+
+def shifts(run_id: str) -> pd.DataFrame:
+    """The run's ranked shifts, narrowed by the sidebar filters the viewer set (company, brand, market and the
+    markets under it). Untouched filters narrow nothing, so the default view is every shift of the run."""
+    df = _shifts(run_id)
+    ss = st.session_state
+    if ss.get("sr_f_mfr"):
+        df = df[df.MANUFACTURER == ss["sr_f_mfr"]]
+    if ss.get("sr_f_brand"):
+        df = df[df.BRAND == ss["sr_f_brand"]]
+    m = ss.get("sr_f_market")
+    if m and m != str(cfg("SCOPE_PARENT_MARKET")):
+        tree = market_tree()
+        keep = {m} | set(tree[tree.PARENT_MARKET_ID == m].MARKET_ID)
+        keep |= set(tree[tree.PARENT_MARKET_ID.isin(keep)].MARKET_ID)
+        df = df[df.MARKET_ID.isin(keep)]
+    return df
 
 
 @st.cache_data(ttl=TTL_S, show_spinner=False)
@@ -252,12 +360,12 @@ def artefacts(run_id: str, cmp_code: str, market_id: str, category: str, brand: 
     return df
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def trend(market_id: str, category: str, brand: str, weeks: int = 104) -> pd.DataFrame:
-    return q("""SELECT WEEK_END_DATE, 100 * VALUE_SHARE AS VALUE_SHARE_PCT, 100 * DIST_SHARE AS DIST_SHARE_PCT
+    return _qc("""SELECT WEEK_END_DATE, 100 * VALUE_SHARE AS VALUE_SHARE_PCT, 100 * DIST_SHARE AS DIST_SHARE_PCT
                 FROM SR_DB.APP.V_UI_SHARE_WEEK WHERE MARKET_ID = ? AND CATEGORY = ? AND BRAND = ?
+                  AND WEEK_END_DATE <= TRY_TO_DATE(?)
                 QUALIFY ROW_NUMBER() OVER (ORDER BY WEEK_END_DATE DESC) <= ? ORDER BY WEEK_END_DATE""",
-             [market_id, category, brand, weeks])
+               (market_id, category, brand, filters().as_of, weeks))
 
 
 def what_if(shift_id: str, lever: str, target: str) -> dict:
@@ -267,57 +375,66 @@ def what_if(shift_id: str, lever: str, target: str) -> dict:
 
 # ---- Shift analysis tabs (cached; read the APP.V_UI_* views from 40_app/416) -----------------------------------
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def brand_sales_week(market_id: str, category: str, brand: str) -> pd.DataFrame:
-    """Weekly value, unit sales and SKUs selling for one brand in one market (any level), oldest first."""
-    return q("""SELECT WEEK_END_DATE, SUM(VALUE_SALES) AS VALUE_SALES, SUM(UNIT_SALES) AS UNIT_SALES,
+    """Weekly value, unit sales and SKUs selling for one brand in one market (any level), oldest first, up to the
+    filter week."""
+    return _qc("""SELECT WEEK_END_DATE, SUM(VALUE_SALES) AS VALUE_SALES, SUM(UNIT_SALES) AS UNIT_SALES,
                        COUNT_IF(VALUE_SALES > 0) AS SKUS_SELLING
                 FROM SR_DB.APP.V_UI_SKU_WEEK WHERE MARKET_ID = ? AND CATEGORY = ? AND BRAND = ?
-                GROUP BY WEEK_END_DATE ORDER BY WEEK_END_DATE""", [market_id, category, brand])
+                  AND WEEK_END_DATE <= TRY_TO_DATE(?)
+                GROUP BY WEEK_END_DATE ORDER BY WEEK_END_DATE""", (market_id, category, brand, filters().as_of))
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def region_summary(category: str, brand: str, weeks: int = 4) -> pd.DataFrame:
-    """Per retailer market: the brand's value sales, value share and SKUs over the last N weeks and the N weeks
-    before, plus the category total (region tile map and retailer table)."""
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_REGION_SUMMARY),
-                     r AS (SELECT s.*, IFF(s.WEEK_END_DATE > DATEADD(week, -?, w.MX), 'NOW', 'BEFORE') AS P
-                           FROM SR_DB.APP.V_UI_REGION_SUMMARY s, w
-                           WHERE s.CATEGORY = ? AND s.WEEK_END_DATE > DATEADD(week, -2 * ?, w.MX))
-                SELECT REGION, RETAILER, MARKET_ID, MARKET_NAME,
+    """Per market the filtered market splits into (regions, or a region's cities): the brand's value sales, value share
+    and SKUs over the last N weeks and the N weeks before, plus the category total (region tile map and table)."""
+    cond, binds = _children_clause("s")
+    return _qc(f"""WITH r AS (SELECT s.*, IFF(s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)), 'NOW', 'BEFORE') AS P
+                           FROM SR_DB.APP.V_UI_REGION_SUMMARY s
+                           WHERE s.CATEGORY = ? AND {cond} AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                             AND s.WEEK_END_DATE > DATEADD(week, -2 * ?, TRY_TO_DATE(?)))
+                SELECT REGION, COALESCE(CITY, RETAILER) AS RETAILER, MARKET_ID, MARKET_NAME,
                        SUM(IFF(P = 'NOW' AND BRAND = ?, VALUE_SALES, 0)) AS VALUE_SALES,
                        SUM(IFF(P = 'BEFORE' AND BRAND = ?, VALUE_SALES, 0)) AS VALUE_SALES_BEFORE,
                        SUM(IFF(P = 'NOW', VALUE_SALES, 0)) AS CAT_VALUE_SALES,
                        SUM(IFF(P = 'BEFORE', VALUE_SALES, 0)) AS CAT_VALUE_SALES_BEFORE,
                        MAX(IFF(P = 'NOW' AND BRAND = ?, SKUS_SELLING, NULL)) AS SKUS_SELLING,
                        MAX(IFF(P = 'NOW' AND BRAND = ?, MAX_STORES_SELLING, NULL)) AS STORES_SELLING,
-                       COUNT(DISTINCT IFF(P = 'NOW', BRAND, NULL)) AS BRANDS
-                FROM r GROUP BY REGION, RETAILER, MARKET_ID, MARKET_NAME ORDER BY REGION""",
-             [weeks, category, weeks, brand, brand, brand, brand])
+                       COUNT(DISTINCT IFF(P = 'NOW', BRAND, NULL)) AS BRANDS,
+                       100 * SUM(IFF(P = 'NOW' AND BRAND = ?, VALUE_SALES, 0)) / NULLIF(SUM(IFF(P = 'NOW', VALUE_SALES, 0)), 0)
+                           AS SHARE_PCT,
+                       100 * SUM(IFF(P = 'BEFORE' AND BRAND = ?, VALUE_SALES, 0))
+                           / NULLIF(SUM(IFF(P = 'BEFORE', VALUE_SALES, 0)), 0) AS SHARE_BEFORE_PCT,
+                       SHARE_PCT - SHARE_BEFORE_PCT AS CHG_PTS
+                FROM r GROUP BY REGION, COALESCE(CITY, RETAILER), MARKET_ID, MARKET_NAME ORDER BY REGION, RETAILER""",
+               tuple([weeks, filters().as_of, category, *binds, filters().as_of, weeks, filters().as_of,
+                      brand, brand, brand, brand, brand, brand]))
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def sku_retailer(category: str, brand: str, weeks: int = 4) -> pd.DataFrame:
-    """Per retailer x SKU of the brand: value sales over the last N weeks and the N weeks before (SKU heatmap)."""
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK)
-                SELECT s.REGION, s.RETAILER, s.MARKET_ID, s.PRODUCT_ID, s.ITEM_DESC, s.SEGMENT, s.PACK_SIZE,
-                       SUM(IFF(s.WEEK_END_DATE > DATEADD(week, -?, w.MX), s.VALUE_SALES, 0)) AS VALUE_SALES,
-                       SUM(IFF(s.WEEK_END_DATE <= DATEADD(week, -?, w.MX), s.VALUE_SALES, 0)) AS VALUE_SALES_BEFORE,
-                       AVG(IFF(s.WEEK_END_DATE > DATEADD(week, -?, w.MX), s.ACV_DIST_PCT, NULL)) AS ACV_DIST_PCT
-                FROM SR_DB.APP.V_UI_SKU_WEEK s, w
-                WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND s.BRAND = ?
-                  AND s.WEEK_END_DATE > DATEADD(week, -2 * ?, w.MX)
-                GROUP BY s.REGION, s.RETAILER, s.MARKET_ID, s.PRODUCT_ID, s.ITEM_DESC, s.SEGMENT, s.PACK_SIZE
-                ORDER BY s.RETAILER, s.ITEM_DESC""", [weeks, weeks, weeks, category, brand, weeks])
+    """Per market x SKU of the brand: value sales over the last N weeks and the N weeks before (SKU heatmap)."""
+    cond, binds = _children_clause("s")
+    a = filters().as_of
+    return _qc(f"""SELECT s.REGION, COALESCE(s.CITY, s.RETAILER) AS RETAILER, s.MARKET_ID, s.PRODUCT_ID, s.ITEM_DESC,
+                       s.SEGMENT, s.PACK_SIZE,
+                       SUM(IFF(s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)), s.VALUE_SALES, 0)) AS VALUE_SALES,
+                       SUM(IFF(s.WEEK_END_DATE <= DATEADD(week, -?, TRY_TO_DATE(?)), s.VALUE_SALES, 0)) AS VALUE_SALES_BEFORE,
+                       AVG(IFF(s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)), s.ACV_DIST_PCT, NULL)) AS ACV_DIST_PCT
+                FROM SR_DB.APP.V_UI_SKU_WEEK s
+                WHERE {cond} AND s.CATEGORY = ? AND s.BRAND = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                  AND s.WEEK_END_DATE > DATEADD(week, -2 * ?, TRY_TO_DATE(?))
+                GROUP BY s.REGION, COALESCE(s.CITY, s.RETAILER), s.MARKET_ID, s.PRODUCT_ID, s.ITEM_DESC, s.SEGMENT,
+                         s.PACK_SIZE
+                ORDER BY RETAILER, s.ITEM_DESC""",
+               tuple([weeks, a, weeks, a, weeks, a, *binds, category, brand, a, weeks, a]))
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def brand_share_weeks(market_id: str, category: str, weeks: int = 26) -> pd.DataFrame:
     """Weekly value share of every brand in one market and category, last N weeks (week x brand heatmap)."""
-    return q("""SELECT WEEK_END_DATE, BRAND, MANUFACTURER, 100 * VALUE_SHARE AS VALUE_SHARE_PCT
-                FROM SR_DB.APP.V_UI_SHARE_WEEK WHERE MARKET_ID = ? AND CATEGORY = ?
+    return _qc("""SELECT WEEK_END_DATE, BRAND, MANUFACTURER, 100 * VALUE_SHARE AS VALUE_SHARE_PCT
+                FROM SR_DB.APP.V_UI_SHARE_WEEK WHERE MARKET_ID = ? AND CATEGORY = ? AND WEEK_END_DATE <= TRY_TO_DATE(?)
                 QUALIFY DENSE_RANK() OVER (ORDER BY WEEK_END_DATE DESC) <= ?
-                ORDER BY WEEK_END_DATE, BRAND""", [market_id, category, weeks])
+                ORDER BY WEEK_END_DATE, BRAND""", (market_id, category, filters().as_of, weeks))
 
 
 # ---- Insight Studio (SR-065; cached; SELECT only, on the same APP.V_UI_SKU_WEEK view the analysis tabs read) -------
@@ -339,20 +456,23 @@ def portfolio(run_id: str) -> dict[str, float]:
     return {k: (0 if v is None or pd.isna(v) else float(v)) for k, v in row.items()}
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def brand_panel(category: str, weeks: int = 104) -> pd.DataFrame:
-    """Week x retailer x brand for one category: sales, units, distribution, stores and SKUs, with the brand's value
-    share of the retailer's category, its price per unit and its price index against the category, all in SQL. The
-    model lab, the workbench and the manager views read this one panel."""
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
-                     b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.RETAILER, s.REGION, s.MANUFACTURER, s.BRAND,
+    """Week x market x brand for one category, in the markets the filtered market splits into (regions, or a
+    region's cities), up to the filter week: sales, units, distribution, stores and SKUs, with the brand's value share
+    of the market's category, its price per unit and its price index against the category, all in SQL. The model lab,
+    the workbench and the manager views read this one panel."""
+    cond, binds = _children_clause("s")
+    a = filters().as_of
+    return _qc(f"""WITH b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, COALESCE(s.CITY, s.RETAILER) AS RETAILER, s.REGION,
+                                  s.MANUFACTURER, s.BRAND,
                                   SUM(s.VALUE_SALES) AS VALUE_SALES, SUM(s.UNIT_SALES) AS UNIT_SALES,
                                   SUM(s.VOLUME_SALES) AS VOLUME_SALES, MAX(s.ACV_DIST_PCT) AS ACV_DIST_PCT,
                                   MAX(s.STORES_SELLING) AS STORES_SELLING, COUNT_IF(s.VALUE_SALES > 0) AS SKUS_SELLING
-                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
-                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ?
-                             AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
-                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, s.RETAILER, s.REGION, s.MANUFACTURER, s.BRAND)
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s
+                           WHERE {cond} AND s.CATEGORY = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                             AND s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?))
+                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, COALESCE(s.CITY, s.RETAILER), s.REGION,
+                                    s.MANUFACTURER, s.BRAND)
                 SELECT WEEK_END_DATE, MARKET_ID, RETAILER, REGION, MANUFACTURER, BRAND, VALUE_SALES, UNIT_SALES,
                        VOLUME_SALES, ACV_DIST_PCT, STORES_SELLING, SKUS_SELLING,
                        100 * VALUE_SALES / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0)
@@ -362,30 +482,31 @@ def brand_panel(category: str, weeks: int = 104) -> pd.DataFrame:
                          / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID)
                                   / NULLIF(SUM(UNIT_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0), 0)
                            AS PRICE_INDEX
-                FROM b ORDER BY WEEK_END_DATE, RETAILER, BRAND""", [category, weeks])
+                FROM b ORDER BY WEEK_END_DATE, RETAILER, BRAND""", tuple([*binds, category, a, weeks, a]))
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def share_report(category: str, weeks: int = 4, compare: str = "previous", retailer: str | None = None,
                  measure: str = "value") -> pd.DataFrame:
     """The competitive share report, all in SQL: every brand's value share, change, rank and rank change, value sales
     and growth, mean ACV, value-weighted price index, velocity (units per store per week), share of distribution points
-    (ACV x SKUs) and fair-share index, for the last N weeks against the N before ("previous") or the same weeks a year
-    ago ("year_ago"), in all retailers or one. measure="volume" bases share and rank on volume sales instead of value
-    (SALES and growth stay value)."""
+    (ACV x SKUs) and fair-share index, for the N weeks up to the filter week against the N before ("previous") or the
+    same weeks a year ago ("year_ago"), across the filtered market's regions or cities, or one of them.
+    measure="volume" bases share and rank on volume sales instead of value (SALES and growth stay value)."""
     off = weeks if compare == "previous" else 52
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
-                     b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND,
+    cond, binds = _children_clause("s")
+    a = filters().as_of
+    return _qc(f"""WITH b AS (SELECT s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND,
                                   SUM(s.VALUE_SALES) AS VALUE_SALES, SUM(s.UNIT_SALES) AS UNIT_SALES,
                                   SUM(IFF(? = 'volume', s.VOLUME_SALES, s.VALUE_SALES)) AS BASE,
                                   MAX(s.ACV_DIST_PCT) AS ACV, MAX(s.STORES_SELLING) AS STORES,
                                   COUNT_IF(s.VALUE_SALES > 0) AS SKUS,
-                                  CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX) THEN 'NOW'
-                                       WHEN s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
-                                        AND s.WEEK_END_DATE <= DATEADD(week, -?, w.MX) THEN 'BEFORE' END AS P
-                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
-                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND (? IS NULL OR s.RETAILER = ?)
-                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND, w.MX),
+                                  CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)) THEN 'NOW'
+                                       WHEN s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?))
+                                        AND s.WEEK_END_DATE <= DATEADD(week, -?, TRY_TO_DATE(?)) THEN 'BEFORE' END AS P
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s
+                           WHERE {cond} AND s.CATEGORY = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                             AND (? IS NULL OR COALESCE(s.CITY, s.RETAILER) = ?)
+                           GROUP BY s.WEEK_END_DATE, s.MARKET_ID, s.MANUFACTURER, s.BRAND),
                      x AS (SELECT b.*, (VALUE_SALES / NULLIF(UNIT_SALES, 0))
                                   / NULLIF(SUM(VALUE_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID)
                                            / NULLIF(SUM(UNIT_SALES) OVER (PARTITION BY WEEK_END_DATE, MARKET_ID), 0), 0)
@@ -407,7 +528,7 @@ def share_report(category: str, weeks: int = 4, compare: str = "previous", retai
                        100 * n.SHARE / NULLIF(n.TDP_SHARE, 0) AS FAIR_SHARE_INDEX
                 FROM r n LEFT JOIN r o ON o.BRAND = n.BRAND AND o.MANUFACTURER = n.MANUFACTURER AND o.P = 'BEFORE'
                 WHERE n.P = 'NOW' ORDER BY RANK, n.BRAND""",
-             [measure, weeks, off + weeks, off, category, retailer, retailer])
+               tuple([measure, weeks, a, off + weeks, a, off, a, *binds, category, a, retailer, retailer]))
 
 
 # ---- Competitive View (cached; SELECT only, on the same APP.V_UI_SKU_WEEK and APP.V_UI_SHARE_WEEK views) -------------
@@ -476,30 +597,63 @@ def promo_index(market_id: str, category: str, weeks: int = 4, compare: str = "p
              [market_id, category, weeks, off + weeks, off, market_id, category, off + weeks])
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
+def brand_snapshot(market_id: str, category: str, weeks: int) -> pd.DataFrame:
+    """Brand explorer: every brand in one market and category for the N weeks to the filter week (NOW), the N weeks
+    before (PP) and the same weeks a year ago (YA): value share, value sales, mean ACV and price index, all in SQL."""
+    a = filters().as_of
+    return _qc("""WITH b AS (SELECT s.MANUFACTURER, s.BRAND,
+                                  CASE WHEN s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)) THEN 'NOW'
+                                       WHEN s.WEEK_END_DATE > DATEADD(week, -2 * ?, TRY_TO_DATE(?)) THEN 'PP'
+                                       WHEN s.WEEK_END_DATE <= DATEADD(week, -52, TRY_TO_DATE(?))
+                                        AND s.WEEK_END_DATE > DATEADD(week, -52 - ?, TRY_TO_DATE(?)) THEN 'YA' END AS P,
+                                  SUM(s.VALUE_SALES) AS SALES, SUM(s.UNIT_SALES) AS UNITS, AVG(s.ACV_DIST_PCT) AS ACV
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s
+                           WHERE s.MARKET_ID = ? AND s.CATEGORY = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                             AND s.WEEK_END_DATE > DATEADD(week, -52 - ?, TRY_TO_DATE(?))
+                           GROUP BY s.MANUFACTURER, s.BRAND, P),
+                     t AS (SELECT P, SUM(SALES) AS CAT_SALES, SUM(SALES) / NULLIF(SUM(UNITS), 0) AS CAT_PRICE
+                           FROM b WHERE P IS NOT NULL GROUP BY P),
+                     s AS (SELECT b.*, 100 * b.SALES / NULLIF(t.CAT_SALES, 0) AS SHARE,
+                                  (b.SALES / NULLIF(b.UNITS, 0)) / NULLIF(t.CAT_PRICE, 0) AS PRICE_INDEX
+                           FROM b JOIN t ON t.P = b.P)
+                SELECT n.MANUFACTURER, n.BRAND, n.SALES, n.SHARE, n.ACV, n.PRICE_INDEX,
+                       p.SHARE AS SHARE_PP, y.SHARE AS SHARE_YA, n.SHARE - p.SHARE AS CHG_PP_PTS,
+                       n.SHARE - y.SHARE AS CHG_YA_PTS, 100 * (n.SALES / NULLIF(y.SALES, 0) - 1) AS SALES_GROWTH_YA_PCT,
+                       n.ACV - y.ACV AS ACV_CHG_YA
+                FROM s n
+                LEFT JOIN s p ON p.BRAND = n.BRAND AND p.MANUFACTURER = n.MANUFACTURER AND p.P = 'PP'
+                LEFT JOIN s y ON y.BRAND = n.BRAND AND y.MANUFACTURER = n.MANUFACTURER AND y.P = 'YA'
+                WHERE n.P = 'NOW' ORDER BY n.SHARE DESC""",
+               (weeks, a, weeks, a, a, weeks, a, market_id, category, a, weeks, a))
+
+
 def price_ladder(category: str, weeks: int = 4) -> pd.DataFrame:
-    """Price per unit by brand and pack size over the last N weeks, all retailers (the price ladder)."""
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK)
-                SELECT s.BRAND, s.MANUFACTURER, s.PACK_SIZE, SUM(s.VALUE_SALES) AS VALUE_SALES,
+    """Price per unit by brand and pack size over the N weeks to the filter week, in the filtered market's
+    regions or cities (the price ladder)."""
+    cond, binds = _children_clause("s")
+    a = filters().as_of
+    return _qc(f"""SELECT s.BRAND, s.MANUFACTURER, s.PACK_SIZE, SUM(s.VALUE_SALES) AS VALUE_SALES,
                        SUM(s.UNIT_SALES) AS UNIT_SALES, SUM(s.VALUE_SALES) / NULLIF(SUM(s.UNIT_SALES), 0) AS PRICE_PER_UNIT
-                FROM SR_DB.APP.V_UI_SKU_WEEK s, w
-                WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX)
+                FROM SR_DB.APP.V_UI_SKU_WEEK s
+                WHERE {cond} AND s.CATEGORY = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                  AND s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?))
                 GROUP BY s.BRAND, s.MANUFACTURER, s.PACK_SIZE
                 HAVING SUM(s.UNIT_SALES) > 0
-                ORDER BY s.PACK_SIZE, PRICE_PER_UNIT""", [category, weeks])
+                ORDER BY s.PACK_SIZE, PRICE_PER_UNIT""", tuple([*binds, category, a, weeks, a]))
 
 
-@st.cache_data(ttl=TTL_S, show_spinner=False)
 def sku_week_panel(category: str, brand: str, weeks: int = 52) -> pd.DataFrame:
-    """Week x retailer x SKU for one brand: sales, units, price per unit, distribution and stores, with the week-on-week
-    changes the anomaly scan reads, all in SQL."""
-    return q("""WITH w AS (SELECT MAX(WEEK_END_DATE) AS MX FROM SR_DB.APP.V_UI_SKU_WEEK),
-                     k AS (SELECT s.WEEK_END_DATE, s.RETAILER, s.REGION, s.PRODUCT_ID, s.ITEM_DESC, s.SEGMENT, s.PACK_SIZE,
+    """Week x market x SKU for one brand: sales, units, price per unit, distribution and stores, with the week-on-week
+    changes the anomaly scan reads, all in SQL, up to the filter week."""
+    cond, binds = _children_clause("s")
+    a = filters().as_of
+    return _qc(f"""WITH k AS (SELECT s.WEEK_END_DATE, COALESCE(s.CITY, s.RETAILER) AS RETAILER, s.REGION, s.PRODUCT_ID,
+                                  s.ITEM_DESC, s.SEGMENT, s.PACK_SIZE,
                                   s.VALUE_SALES, s.UNIT_SALES, s.ACV_DIST_PCT, s.STORES_SELLING,
                                   s.VALUE_SALES / NULLIF(s.UNIT_SALES, 0) AS PRICE_PER_UNIT
-                           FROM SR_DB.APP.V_UI_SKU_WEEK s, w
-                           WHERE s.MARKET_LEVEL = 'RETAILER' AND s.CATEGORY = ? AND s.BRAND = ?
-                             AND s.WEEK_END_DATE > DATEADD(week, -?, w.MX))
+                           FROM SR_DB.APP.V_UI_SKU_WEEK s
+                           WHERE {cond} AND s.CATEGORY = ? AND s.BRAND = ? AND s.WEEK_END_DATE <= TRY_TO_DATE(?)
+                             AND s.WEEK_END_DATE > DATEADD(week, -?, TRY_TO_DATE(?)))
                 SELECT k.WEEK_END_DATE, k.RETAILER, k.REGION, k.PRODUCT_ID, k.ITEM_DESC, k.SEGMENT, k.PACK_SIZE,
                        k.VALUE_SALES, k.UNIT_SALES, k.ACV_DIST_PCT, k.STORES_SELLING, k.PRICE_PER_UNIT,
                        VALUE_SALES / NULLIF(LAG(VALUE_SALES) OVER (PARTITION BY RETAILER, PRODUCT_ID ORDER BY WEEK_END_DATE), 0) - 1
@@ -509,7 +663,7 @@ def sku_week_panel(category: str, brand: str, weeks: int = 52) -> pd.DataFrame:
                        ACV_DIST_PCT - LAG(ACV_DIST_PCT) OVER (PARTITION BY RETAILER, PRODUCT_ID ORDER BY WEEK_END_DATE)
                            AS ACV_WOW,
                        UNIT_SALES / NULLIF(STORES_SELLING, 0) AS UNITS_PER_STORE
-                FROM k ORDER BY WEEK_END_DATE, RETAILER, ITEM_DESC""", [category, brand, weeks])
+                FROM k ORDER BY WEEK_END_DATE, RETAILER, ITEM_DESC""", tuple([*binds, category, brand, a, weeks, a]))
 
 
 # ---- Brief (cached) -------------------------------------------------------------------------------------------
@@ -659,6 +813,21 @@ AGENTS = {
     "SR_DB.SEM.RADAR_ANALYST_AGENT": {
         "label": "Data analyst", "icon": ":material/query_stats:",
         "purpose": "Open business questions: sales, share, distribution, rankings and comparisons, answered as tables."},
+    "SR_DB.SEM.GEO_MARKET_AGENT": {
+        "label": "Chippy Geo", "icon": ":material/public:",
+        "purpose": "Where share moved: cities, regions and states with coordinates, and multi-year trends since 2020."},
+    "SR_DB.SEM.RECOVERY_AGENT": {
+        "label": "Recovery Strategist", "icon": ":material/healing:",
+        "purpose": "Turns a share loss into a ranked recovery plan: which lever, where first, who owns it, what it is worth."},
+    "SR_DB.SEM.PRICE_PROMO_AGENT": {
+        "label": "Pricing & Promo", "icon": ":material/sell:",
+        "purpose": "Price index, price changes, promo intensity and lift against competitors, by market and period."},
+    "SR_DB.SEM.FORECAST_RISK_AGENT": {
+        "label": "Forecast & Risk", "icon": ":material/warning:",
+        "purpose": "Early-warning signals, projected share effect and long-run trend: what could go wrong next."},
+    "SR_DB.SEM.COMPETITOR_AGENT": {
+        "label": "Competitive benchmarking", "icon": ":material/leaderboard:",
+        "purpose": "One company against its rivals: league table, distribution, velocity, price, and where it wins or loses."},
 }
 
 

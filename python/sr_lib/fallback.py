@@ -45,8 +45,27 @@ def _shift(shift: dict, facts: dict) -> dict:
     else:
         so_what = f"Check listings and data status for {brand} in {market}."
     question = "Who took the share?" if loss else f"Who lost the share {brand} gained?"
+    lever = term["term"] if term else "listings"
+    place = where["contributor"] if where else market
+    taker = (f" {flow['brand']} is taking the most ({{{{{flow['fact']}}}}})." if flow and loss else "")
+    diagnosis = ((f"{brand} is {'losing' if loss else 'gaining'} share in {market} mainly through {lever}"
+                  + (f", worst in {place}." if where else ".")) + taker)
+    if loss:
+        action = (f"Sales: restore {lever} at {place} this week, starting with the listings that lapsed. "
+                  f"Trade marketing: check shelf and promotion against the brands gaining share. "
+                  f"Supply chain: confirm stock to the stores that dropped {brand}.")
+    else:
+        action = (f"Sales: lock in the {lever} gains at {place} with the retailer. "
+                  f"Trade marketing: keep the activity that drove the gain running another cycle.")
+    rec = shift.get("recovery") or {}
+    if loss and rec.get("pts"):
+        impact = (f"Restoring {rec.get('lever', lever)} to its earlier level would win back about "
+                  f"{{{{{rec['pts']}}}}}" + (f", worth about {{{{{rec['value']}}}}}." if rec.get("value") else "."))
+    else:
+        impact = f"Value at stake: {{{{{shift['value_at_stake']}}}}}." if shift.get("value_at_stake") else "No value estimate."
     return {"shift_id": shift["shift_id"], "title": _title(brand, "lost" if loss else "gained", market),
-            "why": why[:400], "so_what": so_what, "next_question": question}
+            "why": why[:400], "so_what": so_what, "next_question": question,
+            "diagnosis": diagnosis[:500], "action": action[:600], "impact": impact[:300]}
 
 
 def _watch(item: dict) -> str:
@@ -73,6 +92,10 @@ def template_brief(pack: dict) -> dict:
             headline = f"Top shift: {top['brand']}, {{{{{top['delta']}}}}}."
     else:
         headline = f"No material share shifts for {focus} in {parent} this week."[:200]
+    out_shifts = [_shift(s, facts) for s in shifts]
+    priorities = [f"{s['brand']} in {s['market']}: " + o["action"].split(". ")[0].rstrip(".") + "."
+                  for s, o in zip(shifts, out_shifts) if s.get("direction") == "LOSS"][:3]
     return {"headline": headline,
-            "shifts": [_shift(s, facts) for s in shifts],
+            "shifts": out_shifts,
+            "priorities": priorities,
             "watchlist": [_watch(w) for w in pack.get("watchlist", [])]}

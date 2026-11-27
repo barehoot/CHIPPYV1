@@ -33,6 +33,27 @@ class _Data:
 
 data = _Data()
 
+
+def _fkey() -> str:
+    """The applied sidebar filters as text; part of every studio cache key, so a filter change never reuses a panel."""
+    get = getattr(data, "filters", None)
+    return repr(get()) if get else ""
+
+
+def _cached(fn):
+    """st.cache_data keyed by the function name, the applied filters and the call's own arguments."""
+    import functools
+
+    @st.cache_data(ttl=data.TTL_S, show_spinner=False)
+    def run(name: str, fkey: str, args: tuple, kwargs: tuple):
+        return fn(*args, **dict(kwargs))
+
+    @functools.wraps(fn)
+    def call(*args, **kwargs):
+        return run(fn.__name__, _fkey(), args, tuple(sorted(kwargs.items())))
+    call.clear = run.clear
+    return call
+
 LENSES = {"director": ("Analytics Director", "Is this worth my attention, and how sure are we?"),
           "manager": ("Company Manager", "What does it cost, why, and what do we do on Monday?"),
           "amanager": ("Analytics Manager", "Where is it concentrated, which lever, and who does what?"),
@@ -80,13 +101,13 @@ def _shown(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+@_cached
 def _panel(category: str, masked: bool) -> pd.DataFrame:
     """The brand panel with display names; `masked` is part of the cache key, so a masked view never reuses names."""
     return _shown(data.brand_panel(category, 104))
 
 
-@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+@_cached
 def _sku_panel(category: str, real_brand: str, masked: bool) -> pd.DataFrame:
     """The brand's SKU panel. When names are masked, SKU descriptions (which carry the brand) become 'SKU 1', 'SKU 2'…
     in product-id order, and segment and pack stay as they are."""
@@ -97,13 +118,13 @@ def _sku_panel(category: str, real_brand: str, masked: bool) -> pd.DataFrame:
     return k
 
 
-@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+@_cached
 def _ladder(category: str, masked: bool) -> pd.DataFrame:
     lad = data.price_ladder(category, 4)
     return an.price_ladder(_shown(lad)) if len(lad) else lad
 
 
-@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+@_cached
 def _fit(kind: str, category: str, brand: str, arg: str = "", masked: bool = False):
     """One cached model fit per (model, category, brand, argument, masking); the argument is the start week or the
     measure."""
@@ -823,7 +844,7 @@ def _m_cannibal(c: Ctx) -> None:
 
 # ---- Emerging shifts (a studio lens and a Radar card) -------------------------------------------------------------
 
-@st.cache_data(ttl=data.TTL_S, show_spinner=False)
+@_cached
 def _emerging(category: str, masked: bool, threshold: float, min_z: float) -> pd.DataFrame:
     return an.emerging_shifts(_panel(category, masked), threshold, min_z)
 
@@ -894,7 +915,8 @@ def emerging_radar(run) -> None:
                 st.rerun()
             return
         try:
-            em, thr, mz = _emerging_frame(str(data.cfg("SCOPE_CATEGORY")), masked)
+            em, thr, mz = _emerging_frame(str(data.filters().category if hasattr(data, "filters")
+                                              else data.cfg("SCOPE_CATEGORY")), masked)
         except an.AnalyticsError as e:
             st.caption(str(e))
             return

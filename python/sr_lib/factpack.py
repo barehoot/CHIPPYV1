@@ -34,15 +34,17 @@ class _Facts:
 
 def build_pack(*, run_id: str, brief_id: str, as_of_week: str, scope: dict, currency: str,
                shifts: Iterable[dict], where: Iterable[dict], flows: Iterable[dict],
-               held: Iterable[dict], watch: Iterable[dict]) -> dict:
+               held: Iterable[dict], watch: Iterable[dict], recovery: Iterable[dict] = ()) -> dict:
     """Assemble the L8 pack from result-table rows (upper-case column names, as Snowpark returns them).
 
     shifts: selected SHIFT_RANKED rows, in rank order, with SH1, SH0, D_SHARE_PTS, VALUE_AT_STAKE, MARKET_NAME,
             and the SHARE_BRIDGE terms; where: EXACT_RETAILER rows; flows: SHARE_FLOW rows with SHIFT_ID;
-            held: POSSIBLE_DATA_EFFECT shifts with RULES; watch: EARLY_WARNING rows with MARKET_NAME.
+            held: POSSIBLE_DATA_EFFECT shifts with RULES; watch: EARLY_WARNING rows with MARKET_NAME;
+            recovery: optional SP_WHAT_IF results per SHIFT_ID (LEVER, DELTA_PTS, VALUE), both computed in SQL.
     """
     f = _Facts()
     where_by, flow_by = {}, {}
+    rec_by = {r["SHIFT_ID"]: r for r in recovery}
     for w in where:
         where_by.setdefault(w["SHIFT_ID"], []).append(w)
     for x in flows:
@@ -76,6 +78,13 @@ def build_pack(*, run_id: str, brief_id: str, as_of_week: str, scope: dict, curr
                     "FROM_BRAND": x["FROM_BRAND"], "TO_BRAND": x["TO_BRAND"]}
             entry["flow"].append({"brand": x["COUNTERPART"],
                                   "fact": f.add(x["FLOW_PTS"], "pts", src("APP.SHARE_FLOW", keys, "FLOW_PTS"))})
+        rec = rec_by.get(sid)
+        if rec and rec.get("DELTA_PTS") is not None:
+            keys = {"SHIFT_ID": sid, "LEVER": rec["LEVER"], "TARGET": "BASE"}
+            entry["recovery"] = {"lever": str(rec["LEVER"]).lower(),
+                                 "pts": f.add(rec["DELTA_PTS"], "pts", src("APP.SP_WHAT_IF", keys, "delta_pts")),
+                                 "value": f.add(rec.get("VALUE"), "money",
+                                                src("APP.SP_WHAT_IF", keys, "delta_pts/100*VALUE_AT_STAKE/D_SHARE"))}
         out_shifts.append(entry)
 
     out_held = []
@@ -190,6 +199,25 @@ def _rows(session, sql: str, params: list) -> list[dict]:
     return out
 
 
+def _recovery(session, shift_ids: list[str]) -> list[dict]:
+    """Per selected shift: restore distribution to its comparison-period level (SP_WHAT_IF, BASE). The share effect
+    and its value are computed in SQL; a shift the scenario cannot price is left out (no fact, no claim)."""
+    out = []
+    for sid in shift_ids:
+        try:
+            res = session.call("SR_DB.APP.SP_WHAT_IF", sid, "DISTRIBUTION", "BASE")
+            res = json.loads(res) if isinstance(res, str) else res
+            if not isinstance(res, dict) or res.get("error") or res.get("delta_pts") is None:
+                continue
+            row = session.sql("SELECT ? / 100 * VALUE_AT_STAKE / NULLIF(D_SHARE, 0) AS V FROM SR_DB.APP.SHIFT_RANKED "
+                              "WHERE SHIFT_ID = ?", params=[float(res["delta_pts"]), sid]).collect()
+            out.append({"SHIFT_ID": sid, "LEVER": "DISTRIBUTION", "DELTA_PTS": res["delta_pts"],
+                        "VALUE": abs(row[0]["V"]) if row and row[0]["V"] is not None else None})
+        except Exception:                               # a scenario is optional: the brief carries on without it
+            continue
+    return out
+
+
 def build_fact_pack(session, run_id: str) -> str:
     """APP.SP_BUILD_FACT_PACK(P_RUN_ID): writes APP.FACT_PACK for the run and returns the new BRIEF_ID."""
     session.sql(f"ALTER SESSION SET QUERY_TAG = 'SR|run={run_id}|step=FACT_PACK'").collect()
@@ -197,10 +225,12 @@ def build_fact_pack(session, run_id: str) -> str:
     brief_id = str(uuid.uuid4())
     scope = {"category": ctx["CATEGORY"], "parent_market": ctx["PARENT_NAME"] or ctx["PARENT_ID"],
              "focus_manufacturer": ctx["FOCUS"]}
+    shifts = _rows(session, _SHIFTS_SQL, [run_id])
     pack = build_pack(run_id=run_id, brief_id=brief_id, as_of_week=ctx["AS_OF"], scope=scope,
-                      currency=ctx["CURRENCY"] or "", shifts=_rows(session, _SHIFTS_SQL, [run_id]),
+                      currency=ctx["CURRENCY"] or "", shifts=shifts,
                       where=_rows(session, _WHERE_SQL, [run_id]), flows=_rows(session, _FLOW_SQL, [run_id]),
-                      held=_rows(session, _HELD_SQL, [run_id]), watch=_rows(session, _WATCH_SQL, [run_id]))
+                      held=_rows(session, _HELD_SQL, [run_id]), watch=_rows(session, _WATCH_SQL, [run_id]),
+                      recovery=_recovery(session, [s["SHIFT_ID"] for s in shifts if float(s["D_SHARE_PTS"]) < 0]))
     scope_key = f"{ctx['CATEGORY']}|{ctx['PARENT_ID']}|{ctx['FOCUS']}"
     session.sql("DELETE FROM SR_DB.APP.FACT_PACK WHERE RUN_ID = ?", params=[run_id]).collect()
     session.sql("INSERT INTO SR_DB.APP.FACT_PACK (RUN_ID, BRIEF_ID, SCOPE_KEY, PACK, N_FACTS) "
